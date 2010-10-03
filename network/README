@@ -1,0 +1,100 @@
+
+================================================================================
+ Network datagram Format
+================================================================================
+
+  This is an overview of the layout of a single Network datagram.
+  All numeric data is encoded in Big Endian format.
+
+  A single UDP datagram:
+
+		==================
+		|     UDP Header |  <- 22 bytes
+		|----------------|
+		| Message Header |  <- 5 or 7 bytes
+		|----------------|
+		|   Message Data |  <- N bytes
+		==================
+
+ > UDP Header - 22 bytes:
+   This is present in all datagrams and will be handled by the UDP transport
+   layer. We will not be seeing this data in the packet struct.
+
+ > Message header - 5 or 7 bytes (depending on which flags are set)
+   The message header is something we specify in our network API and is part of
+   every datagram we send out. This header contains some data which we need to
+   properly process the incoming datagrams and bind it to a known client.
+   
+   > Client ID - 2 bytes
+     This ID is generated from the 2 low bytes of the client's private IP
+     address. We need this in order to accurately identify multiple clients
+     which connect through a NAT router. We do not identify datagram sources
+     just by the IP/port specified in the UDP header, since this can cause
+     problems with certain NAT routers which cycle outgoing UDP ports at random.
+     In these (rare) cases, we require extra information. This is where the
+     subnet IP of a given user comes in and is why we keep the lower 2 bytes of
+     this IP in the message header.
+
+     It facilitates the creation of a Md5 hash of the sender's IP and ClientID
+     and represents a unique identifier for the sender. It is not to be confused
+     with a session key. This Owner id is bound to the physical machine the user
+     is currently operating on. It remains the same across all sessions from
+     that particular machine, as long as it has the same public and private IP
+     addresses.
+     
+     Example: Bob and Joe share a LAN network through a NAT enabled router.
+
+     - The public IP for both is: 80.254.11.3
+     - Bob's private IP (within the LAN network) is: 192.168.1.101
+     - Joe's private IP (within the LAN network) is: 192.168.1.102
+     
+     Bob's owner id is calculated as follows:
+         V1 = to_ipv6("80.254.11.3")                // = 16 bytes
+         V2 = 192.168.1.101 & 0.0.255.255 = 1.101   // = 2 bytes
+        Bob = md5(V1 + V2)                          // = 16 bytes
+
+     Joe's owner id is calculated as follows:
+         V1 = to_ipv6("80.254.11.3")                // = 16 bytes
+         V2 = 192.168.1.102 & 0.0.255.255 = 1.102   // = 2 bytes
+        Joe = md5(V1 + V2)                          // = 16 bytes
+
+   > Flags - 1 byte
+     This value contains some boolean flags for the datagram. The properties are
+     encoded as bits in this single byte.
+
+     > PFCompressed (0x01) - This flag indicates that the datagram content is
+       compressed and should therefor be decompressed before we attempt to use
+       it. The message header itself is not part of the compressed data for
+       obvious reasons.
+
+     > PFEncrypted (0x02) - This flag indicates that the datagram content is
+       encrypted. The library allows us to bind a Encrypt and Decrypt function
+       handler which does the actual transformation if and when this flag is
+       set. If PFCompressed is set as well, we will always compress before
+       encryption. We should therefor always decrypt before decompressing.
+       Reason being that encrypted data usually compresses very poorly.
+
+     > PFFragmented - (0x04) - This tells us we have several packets of one
+       larger data structure. Setting this flag adds 2 more bytes to the message
+       header which contains numerical sequence numbers. eg: packet 1 of 10.
+       When we get a packet like this, we should store it somewhere until all
+       packets of this sequence have arrived. We can then reassemble the 
+       original datastructure and pass it on to the host application.
+
+   > Sequence - 2 bytes
+     This is a 16 bit unsigned integer which marks the packet's number. It is
+     incremented by 1 with every new packet. We use this to verify the order of
+     the data being sent and to compensate for any packets which got lost in 
+     the great void.
+
+ > Message Data - N bytes
+   This is the actual message data. The size of this depends on it's contents, 
+   and whether or not it has been compressed. But it always has a upper bound
+   which is defined in the network.datagramSize variable. This can be changed
+   before connection initialization. The default value is 1400 bytes. This
+   includes the UDP header. We choose this value, because it seems to be
+   accepted as the most practical size. It's slightly smaller than a typical
+   Ethernet MTU (Maximum Transmission Unit) and still allows a rather sizable
+   chunk of data to be transfered without the need to fragment datagrams into
+   multiple chuncks.
+

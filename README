@@ -1,0 +1,81 @@
+
+================================================================================
+ GNARLY
+================================================================================
+
+This project is an attempt at a UDP network library. Primarily aimed at games.
+
+Very much Work I progress.
+
+See network/README for a detailed overview of how each packet is constructed.
+See client/README and the client code for an example of how it all works.
+
+================================================================================
+ FEATURES
+================================================================================
+
+- Full IPv4 and IPv6 support
+- NAT client resolution: Multiple clients connecting from behind a NAT router
+  and sharing the same public IP can accurately be identified.
+
+- Packet compression and encryption can be enabled/disabled.
+  You can set (de)compression and (en/de)cryption handlers if you wish to use
+  your own versions of either of these.
+
+- Customizable packet size limit. Defaults to 1400 bytes. This includes the
+  22 byte UDP header and a 5 or 7 byte (depending on which flags are set) header
+  we use in this library internally.
+
+- Supports packet fragmentation. If a chunk of data you want to send exceeds
+  the maximum packet size, the library will automatically create multiple
+  sequentially tagged packets and has the ability to cache them on the receiving
+  end in order to reconstruct the original data. This mechanism also guarantees
+  that the multi-packet dataset is rebuilt in the correct order.
+ 
+  All if this is completely transparent to the host application. All it will
+  deal with is sending any arbitrarilly sized chunk of data and receive it on
+  the other end. It will never know how many packets where involved. It gets
+  a 'network.Message' struct instance containing the entire dataset and the
+  Md5 hash identifying the sender.
+
+================================================================================
+TODO
+================================================================================
+
+- Implement latency checking. We opt to periodically send 'PING' packets to a
+  given client instead of embedding a timestamp in every single datagram. 
+  Reason being that the timestamp incurs a considerable size increase in the
+  packet where this is really not necessary. A PING packet is potentially less
+  accurate, because it polls for latency less frequently, but the space we save
+  in each normal packet is well worth it in my opinion.
+
+- Implement timeout mechanism so we can clean out the list of known peers
+  periodically. this should go hand in hand with the Latency checking described
+  above.
+
+- Implement our own default compression and encryption routines. Currently these
+  are just empty placeholder functions. The mechanism to make these work on
+  packets is in place and operational; these functions just need something to
+  do.
+
+- Implement proper ACK packets. Ideally these should piggyback on other packets.
+
+--------------------------------------------------------------------------------
+ USAGE
+--------------------------------------------------------------------------------
+
+ In order to start using this repository, make sure you have the latest Go
+ buildtools installed and follow these steps:
+
+ $ cd /path/to/codelib
+ $ git clone http://github.com/jteeuwen/gnarly.git
+ $ cd gnarly
+ $ make
+
+--------------------------------------------------------------------------------
+ LICENSE
+--------------------------------------------------------------------------------
+
+This code is subject to a 1-clause BSD license.
+The contents of which can be found in the LICENSE file.
+

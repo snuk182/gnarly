@@ -1,0 +1,112 @@
+
+This is a simple and dumb client using the network library. It sets itself up
+as a receiver for UDP messages and waits for anything to come in. A separate
+goroutine polls for commandline input from the user. Depending on which
+addresses you used to invoke it, you can use this to have the client talk to
+itself over a UDP connection.
+
+Example invocation:
+
+	$ ./client [::1] [::1]:54321 [::1]:54321
+
+or the ipv4 version:
+
+	$ ./client 127.0.0.1 127.0.0.1:54321 127.0.0.1:54321
+
+
+The last 2 addresses with ports are the public source and destination.
+The source is the address/port on which this client listens for incoming data.
+The destination is just used for the sake of demonstration. Any text you type
+in the console after launching the client, will be sent to that address/port.
+
+So by specifying the same address/port twice, you essentially just send the
+data back to this client itself. This is quite handy for debugging purposes as
+the program is both the client and server at the same time.
+
+The first address in the invocation (without the port number), should be the
+internal LAN ip your system has. For the sake of testing we use the loopback
+address for everything, but normally the first one would be different. It is
+used to identify this client when it's behind a NAT router. We hope to fix the
+library soon enough so this will be detected automatically, but for now you have
+to specify it manually.
+
+================================================================================
+ EXAMPLE
+================================================================================
+
+Here is some sample output of the client program. The text following a '>' is
+input into the console manually. Once the return key is hit, the network library
+sends it to the receiver. Which in this case is the client itself. Basically
+like a very dumb chat client.
+
+Don't mind the utter randomness of the input text. I was bored :p
+
+Fields as they are listed in the output below:
+
+ - Subsequence numbers for fragmented packets. eg: packet 1 of 5
+ - Packet flags: Compressed | Encrypted | Fragmented
+ - Packet sequence number. Current number of total packets sent in session.
+ - client id. 2 least significant bytes of local client IP (IP from LAN network
+   if present. used to keep multiple clients behind NAT separated)
+ - packet content
+
+Packetsize is set to 45 bytes for this test. 22 bytes for UDP header, 7 bytes
+for fragmented packet header and 16 bytes for actual data. This limit would
+normally be 1400 bytes. Low size limit was needed to test packet fragmentation.
+
+================================================================================
+
+$ ./client [::1] [::1]:54321 [::1]:54321
+i 23:00:30.336761 Connecting...
+i 23:00:30.345286 Listening on: [::1]:54321
+i 23:00:30.345437 Using client Id: [249 222 178 137 188 61 234 203 130 108 176 136 152 77 0 74]
+
+> They also do not roam around medieval castles in central and western Europe.
+
+[000/005] | 0x05 | 0x0000 | 00 01 | "They also do not"
+[001/005] | 0x05 | 0x0001 | 00 01 | " roam around med"
+[002/005] | 0x05 | 0x0002 | 00 01 | "ieval castles in"
+[003/005] | 0x05 | 0x0003 | 00 01 | " central and wes"
+[004/005] | 0x05 | 0x0004 | 00 01 | "tern Europe."
+
+> I would welcome a 'proper' dragon. They seem like noble creatures. It also
+  can't hurt to have a personal easyJet alternative. 
+
+[000/008] | 0x05 | 0x0005 | 00 01 | "I would welcome "
+[001/008] | 0x05 | 0x0006 | 00 01 | "a 'proper' drago"
+[002/008] | 0x05 | 0x0007 | 00 01 | "n. They seem lik"
+[003/008] | 0x05 | 0x0008 | 00 01 | "e noble creature"
+[004/008] | 0x05 | 0x0009 | 00 01 | "s. It also can't"
+[005/008] | 0x05 | 0x000a | 00 01 | " hurt to have a "
+[006/008] | 0x05 | 0x000b | 00 01 | "personal easyJet"
+[007/008] | 0x05 | 0x000c | 00 01 | " alternative."
+
+> and this is where we wrap this little story up and call it a day. I have
+  other, more pressing matters to attend to.
+
+[000/008] | 0x05 | 0x000d | 00 01 | "and this is wher"
+[001/008] | 0x05 | 0x000e | 00 01 | "e we wrap this l"
+[002/008] | 0x05 | 0x000f | 00 01 | "ittle story up a"
+[003/008] | 0x05 | 0x0010 | 00 01 | "nd call it a day"
+[004/008] | 0x05 | 0x0011 | 00 01 | ". I have other, "
+[005/008] | 0x05 | 0x0012 | 00 01 | "more pressing ma"
+[006/008] | 0x05 | 0x0013 | 00 01 | "tters to attend "
+[007/008] | 0x05 | 0x0014 | 00 01 | "to."
+
+> If that isn't unambiguous enough, the client is horribly out of sync anyways.
+
+[000/005] | 0x05 | 0x0015 | 00 01 | "If that isn't un"
+[001/005] | 0x05 | 0x0016 | 00 01 | "ambiguous enough"
+[002/005] | 0x05 | 0x0017 | 00 01 | ", the client is "
+[003/005] | 0x05 | 0x0018 | 00 01 | "horribly out of "
+[004/005] | 0x05 | 0x0019 | 00 01 | "sync anyways."
+
+> My thoughts exactly.
+
+[000/002] | 0x05 | 0x001a | 00 01 | "My thoughts exac"
+[001/002] | 0x05 | 0x001b | 00 01 | "tly."
+
+> so..
+
+[000/001] | 0x01 | 0x001c | 00 01 | "so.."
+
