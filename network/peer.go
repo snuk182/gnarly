@@ -100,8 +100,8 @@ func (this *Peer) Listen(pinginterval uint64, timeout uint16, mh MessageHandler)
 // require a 64 bit integer. So the extra percision of microseconds adds no
 // extra cost.
 func (this *Peer) ping() {
-	// Use this opportunity to make sure clients have not timed out.
 	// Send current time in microseconds to the remaining clients.
+	// Use this opportunity to make sure clients have not timed out.
 	ms := time.Nanoseconds() / 1e3
 
 	data := []uint8{
@@ -112,20 +112,21 @@ func (this *Peer) ping() {
 		uint8(ms >> 8), uint8(ms),
 	}
 
-	this.lock.Lock()
 	limit := int64(this.timeout) * 1e9
 	for id := range this.clients {
 		if time.Nanoseconds()-this.clients[id].lastpacket > limit {
 			// This one has exceeded the non-response time limit.
 			// Consider it a lost cause.
 			this.onMessage(this.clients[id], MsgPeerDisconnected, nil)
+
+			this.lock.Lock()
 			this.clients[id] = nil, false
+			this.lock.Unlock()
 			continue
 		}
 
 		this.Send(this.clients[id].Addr, data)
 	}
-	this.lock.Unlock()
 }
 
 // Poll for incoming data
@@ -151,13 +152,17 @@ func (this *Peer) handleDatagram(dg *datagram) {
 	id := dg.Packet.Owner()
 
 	// Create or update peer (owner of packet).
-	this.lock.Lock()
 	if client, ok = this.clients[id]; !ok {
 		client, _ = NewPeer(dg.Addr, dg.Packet.ClientId())
+
+		this.lock.Lock()
 		this.clients[id] = client
+		this.lock.Unlock()
+
 		this.onMessage(this.clients[id], MsgPeerConnected, nil)
 	}
 
+	this.lock.Lock()
 	client.Addr = dg.Addr
 	client.PacketCount = dg.Packet.Sequence()
 	client.lastpacket = dg.Timestamp
@@ -180,8 +185,7 @@ func (this *Peer) handleDatagram(dg *datagram) {
 		var i int
 		for i = range this.cache {
 			if this.cache[i] == nil {
-				// Not yet. Stop processing
-				return
+				return // Not yet. Stop processing
 			}
 		}
 
