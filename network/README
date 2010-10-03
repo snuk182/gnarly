@@ -90,7 +90,7 @@
  > Message Data - N bytes
    This is the actual message data. The size of this depends on it's contents, 
    and whether or not it has been compressed. But it always has a upper bound
-   which is defined in the network.datagramSize variable. This can be changed
+   which is defined in the network.PacketSize variable. This can be changed
    before connection initialization. The default value is 1400 bytes. This
    includes the UDP header. We choose this value, because it seems to be
    accepted as the most practical size. It's slightly smaller than a typical

@@ -3,24 +3,34 @@ package network
 import "os"
 import "net"
 import "bytes"
+import "time"
+import "sync"
 import "crypto/md5"
 
 // This represents a unique client connecting to our machine. This structure
 // maintains some counters and buffers used for reliable identification and
 // caching of the data packets sent to/from said client.
 type Peer struct {
-	PacketCount uint16           // This counter keeps track of the amount of packets we sent to the receiver.
-	Addr        *net.UDPAddr     // Public address for this peer
-	clientId    []byte           // 2 byte client id
-	scratch     []byte           // A temporary data buffer
-	conn        *udpListener     // UDP listener
-	clients     map[string]*Peer // list of known clients we rceived data from in this session
-	messages    chan *Message    // Outgoing messages with received data structures.
-	cache       []Packet         // cache of datagrams. uses when expecting a sequence
+	Id          string       // 16 byte Md5 hash identifying this peer.
+	clientId    []uint8      // 2 byte client id.
+	Addr        *net.UDPAddr // Public address for this peer.
+	PacketCount uint16       // This counter keeps track of the amount of packets we sent to the receiver.
+	latencydata [2]uint32    // Total Packet count and Total Packet rountrip time in microseconds for each PING request.
+	lastpacket  int64        // Last packet receive time. Used for timeout detection
+
+	// Fields only used by a listening peer.
+	scratch  []uint8          // A temporary data buffer.
+	conn     *udpListener     // UDP listener.
+	clients  map[string]*Peer // List of known clients we rceived data from in this session.
+	messages chan *Message    // Outgoing messages.
+	cache    []Packet         // Cache of packets. Used when expecting a sequence.
+	ticker   *time.Ticker     // Used for ping requests when this peer is functioning as a listener.
+	lock     *sync.Mutex      // Used to synchronise access to some peer fields.
+	timeout  uint16           // Number of seconds a client can remain unresponsive before we consider it 'disconnected'.
 }
 
 // Constructs a new Peer instance
-func NewPeer(addr *net.UDPAddr, clientid []byte) (p *Peer, err os.Error) {
+func NewPeer(addr *net.UDPAddr, clientid []uint8) (p *Peer, err os.Error) {
 	if len(clientid) != 2 {
 		return nil, ErrInvalidClientID
 	}
@@ -28,22 +38,50 @@ func NewPeer(addr *net.UDPAddr, clientid []byte) (p *Peer, err os.Error) {
 	p = new(Peer)
 	p.clientId = clientid
 	p.Addr = addr
+
+	var d []uint8
+
+	buf := bytes.NewBuffer(d)
+	buf.Write(addr.IP.To16())
+	buf.Write(clientid)
+
+	hash := md5.New()
+	hash.Write(buf.Bytes())
+	p.Id = string(hash.Sum())
 	return
 }
 
-// Begin listening on the public IP/port
-func (this *Peer) Listen() (err os.Error) {
+func (this *Peer) GetLatency() uint16 {
+	if this.latencydata[0] == 0 {
+		return 0
+	}
+	return uint16(this.latencydata[1] / this.latencydata[0])
+}
+
+// Begin listening on the public IP/port. Specify the interval at which you
+// want to 'ping' known clients. This value is the number of nanoseconds you
+// want between each ping. It is used to measure latency and to detect timeouts.
+// The timeout argument is the number of seconds we should allow a peer to 
+// remain inactive before we consider it 'disconnected'.
+func (this *Peer) Listen(pinginterval uint64, timeout uint16) (err os.Error) {
 	if this.conn != nil {
 		return
 	}
 
 	if cap(this.scratch) == 0 {
-		this.scratch = make([]byte, PacketSize-UdpHeaderSize)
+		this.scratch = make([]uint8, PacketSize-UdpHeaderSize)
 	}
 
+	if pinginterval == 0 {
+		pinginterval = 1e10 // Every 10 seconds = default
+	}
+
+	this.lock = new(sync.Mutex)
 	this.clients = make(map[string]*Peer)
 	this.conn = newUdpListener()
 	this.messages = make(chan *Message)
+	this.ticker = time.NewTicker(int64(pinginterval))
+	this.timeout = timeout
 
 	if err = this.conn.Run(this.Addr); err != nil {
 		return
@@ -53,108 +91,194 @@ func (this *Peer) Listen() (err os.Error) {
 	return
 }
 
+// Ping every known client. We send a 64 bit timestamp. This is the current time
+// in microseconds. This kind of precision adds some packet size overhead as
+// opposed to a regular 4 byte unix timestamp, but we get better timing info.
+// These packets are also only send at low intervals, so the extra 4 bytes are
+// not going to be a problem. We could use milliseconds, but that would still
+// require a 64 bit integer. So the extra percision of microseconds adds no
+// extra cost.
+func (this *Peer) ping() {
+	// Use this opportunity to make sure clients have not timed out.
+
+	this.lock.Lock()
+	limit := int64(this.timeout) * 1e9
+	for id := range this.clients {
+		if time.Nanoseconds()-this.clients[id].lastpacket > limit {
+			// This one has exceeded the non-response time limit.
+			// Consider it a lost cause.
+			this.messages <- NewMessage(MsgPeerDisconnected, id, nil)
+			this.clients[id] = nil, false
+		}
+	}
+	this.lock.Unlock()
+
+	// Current time in microseconds
+	ms := time.Nanoseconds() / 1e3
+
+	data := []uint8{
+		MsgPing,
+		uint8(ms >> 56), uint8(ms >> 48),
+		uint8(ms >> 40), uint8(ms >> 32),
+		uint8(ms >> 24), uint8(ms >> 16),
+		uint8(ms >> 8), uint8(ms),
+	}
+
+	for _, client := range this.clients {
+		this.Send(client.Addr, data)
+	}
+}
+
+// Poll for incoming data
 func (this *Peer) poll() {
 	var dg *datagram
-	var client *Peer
-	var ok bool
-	var id string
-	var s1, s2 uint8
-	var err os.Error
-	var d []byte
-	var i int
 
-	buf := bytes.NewBuffer(d)
-
-loop:
-	for this.conn != nil {
+	for this.conn != nil && this.ticker != nil {
 		select {
-		// case err = <-this.conn.errors: // Should be processed by host app
+		case _ = <-this.ticker.C:
+			go this.ping()
+
 		case dg = <-this.conn.in:
-			id = string(dg.Packet.Owner())
-
-			// Create or update peer (owner of packet).
-			if client, ok = this.clients[id]; !ok {
-				client, _ = NewPeer(dg.Addr, dg.Packet.ClientId())
-				this.clients[id] = client
-			}
-
-			// We have to keep updating the address. Some clients switch
-			// ports at random. We need the latest up-to-date IP+port so our
-			// outgoing data arrives at the right place.
-			client.Addr = dg.Addr
-
-			if dg.Packet[18]&PFFragmented != 0 {
-				// This packet is part of a sequence. We need to store it and
-				// make sure we get all of them. We can then reassemble the
-				// original datastructure.
-
-				// TODO(jimt): We should possible check if the current packet is
-				// part if the same sequence as the one we have in cache. We can
-				// do this by comparing the first received sequence number
-				// against the current packet's first subsequence number.
-
-				s1, s2 = dg.Packet.SubSequence()
-				if int(s2) > len(this.cache) {
-					this.cache = make([]Packet, s2)
-				}
-				this.cache[s1] = dg.Packet
-
-				// Check if we have all of them
-				for i = range this.cache {
-					if this.cache[i] == nil {
-						continue loop
-					}
-				}
-
-				buf.Truncate(0)
-				for i = range this.cache {
-					buf.Write(this.cache[i].Data())
-					this.cache[i] = nil
-				}
-
-				// reset cache
-				this.cache = this.cache[0:0]
-
-				if err = this.process(id, dg.Packet.Flags(), buf.Bytes()); err != nil {
-					this.conn.errors <- err
-				}
-			} else {
-				// Single message. Process it.
-				if err = this.process(id, dg.Packet.Flags(), dg.Packet.Data()); err != nil {
-					this.conn.errors <- err
-				}
-			}
+			go this.handleDatagram(dg)
 		}
 	}
 }
 
-func (this *Peer) process(id string, flags uint8, data []byte) (err os.Error) {
-	// Decrypt if necessary.
-	if flags&PFEncrypted != 0 && Decrypt != nil {
-		if data, err = Decrypt([]byte(id), data); err == nil {
+func (this *Peer) handleDatagram(dg *datagram) {
+	var client *Peer
+	var ok bool
+
+	id := dg.Packet.Owner()
+
+	// Create or update peer (owner of packet).
+	this.lock.Lock()
+	if client, ok = this.clients[id]; !ok {
+		client, _ = NewPeer(dg.Addr, dg.Packet.ClientId())
+		this.clients[id] = client
+		this.messages <- NewMessage(MsgPeerConnected, id, nil)
+	}
+
+	client.Addr = dg.Addr
+	client.PacketCount = dg.Packet.Sequence()
+	client.lastpacket = dg.Timestamp
+	this.lock.Unlock()
+
+	if dg.Packet[18]&PFFragmented != 0 {
+		// This packet is part of a sequence. We need to store it and
+		// make sure we get all of them. We can then reassemble the
+		// original dataset.
+
+		s1, s2 := dg.Packet.SubSequence()
+		this.lock.Lock()
+		if int(s2) > len(this.cache) {
+			this.cache = make([]Packet, s2)
+		}
+		this.cache[s1] = dg.Packet
+		this.lock.Unlock()
+
+		// Check if we have all of them
+		var i int
+		for i = range this.cache {
+			if this.cache[i] == nil {
+				// Not yet. Stop processing
+				return
+			}
+		}
+
+		// We have all members of the sequence. Reassemble it.
+		var data []uint8
+		buf := bytes.NewBuffer(data)
+
+		this.lock.Lock()
+		for i = range this.cache {
+			buf.Write(this.cache[i].Data())
+			this.cache[i] = nil
+		}
+
+		this.cache = this.cache[0:0]
+		this.lock.Unlock()
+
+		data = dg.Packet.Data()
+
+		// Decrypt if necessary.
+		if dg.Packet[18]&PFEncrypted != 0 && Encryption != nil {
+			data = Encryption.Decrypt(id, data)
+		}
+
+		// Decompress if necessary.
+		if dg.Packet[18]&PFCompressed != 0 && Compression != nil {
+			data = Compression.Decompress(data)
+		}
+
+		// Send message with data and peerid. We don't send the whole
+		// peer structure. It can be queried with Peer.GetClient() using
+		// the id in the message. Most of the time the id is all the
+		// host application needs to identify the sender.
+		this.messages <- NewMessage(data[0], id, data[1:])
+	} else {
+		data := dg.Packet.Data()
+
+		// Check if we got a packet used by this lib internally (eg: ping).
+		// These don't have to be forwarded to the host app.
+		switch data[0] {
+		case MsgPing: // respond with supplied timestamp
+			data[0] = MsgPong
+			this.Send(dg.Addr, data)
+			return
+
+		case MsgPong: // Calculate latency from packet rounttrip time.
+			cms := time.Nanoseconds() / 1e3
+			oms := int64(data[1])<<56 | int64(data[2])<<48 | int64(data[3])<<40 |
+				int64(data[4])<<32 | int64(data[5])<<24 | int64(data[6])<<16 |
+				int64(data[7])<<8 | int64(data[8])
+
+			// We average the latency out over the last 10 ping requests.
+			this.lock.Lock()
+			if client.latencydata[0] >= 10 {
+				client.latencydata[0] = 0
+				client.latencydata[1] = 0
+			}
+
+			client.latencydata[0]++
+			client.latencydata[1] += uint32(cms - oms)
+			this.lock.Unlock()
 			return
 		}
-	}
 
-	// Decompress if necessary.
-	if flags&PFCompressed != 0 && Decompress != nil {
-		data = Decompress(data)
-	}
+		// Decrypt if necessary.
+		if dg.Packet[18]&PFEncrypted != 0 && Encryption != nil {
+			data = Encryption.Decrypt(id, data)
+		}
 
-	// Send message with data and peerid. We don't send the whole
-	// peer structure. It can be queried with Peer.GetClient() using
-	// the id in the message. Most of the time the id is all the
-	// host application needs to identify the sender.
-	this.messages <- NewMessage(id, data)
-	return
+		// Decompress if necessary.
+		if dg.Packet[18]&PFCompressed != 0 && Compression != nil {
+			data = Compression.Decompress(data)
+		}
+
+		// Send message with data and peerid. We don't send the whole
+		// peer structure. It can be queried with Peer.GetClient() using
+		// the id in the message. Most of the time the id is all the
+		// host application needs to identify the sender.
+		this.messages <- NewMessage(data[0], id, data[1:])
+	}
 }
 
 // Close the listener
 func (this *Peer) Close() {
+	this.lock.Lock()
+
+	if this.ticker != nil {
+		this.ticker.Stop()
+		this.ticker = nil
+	}
+
 	if this.conn != nil {
 		this.conn.Close()
 		this.conn = nil
 	}
+
+	this.lock.Unlock()
+	this.lock = nil
 }
 
 // Returns a channel which will push any packet processing errors
@@ -163,48 +287,31 @@ func (this *Peer) Errors() <-chan os.Error { return this.conn.errors }
 // Contains incoming messages from unique peers
 func (this *Peer) Messages() <-chan *Message { return this.messages }
 
-// Returns a 16 byte id identifying the unique user.
-func (this *Peer) GetId() []byte {
-	var d []byte
-
-	buf := bytes.NewBuffer(d)
-	buf.Write(this.Addr.IP.To16())
-	buf.Write(this.clientId)
-
-	hash := md5.New()
-	hash.Write(buf.Bytes())
-	return hash.Sum()
-}
-
 // This sends the given data to the given address. It takes care of building
 // the packets with accurate header information. If the length of the supplied
 // data exceeds the established packet size (minus the UDP + message headers),
 // it will also take care of the required packet fragmentation so all the 
 // information is sent. If network.Compressed and/or network.Encrypted are set.
 // this will also make sure these operations are performed on the data.
-func (this *Peer) Send(addr string, data []byte) (err os.Error) {
-	var udpaddr *net.UDPAddr
-	if udpaddr, err = net.ResolveUDPAddr(addr); err != nil {
-		return
-	}
+func (this *Peer) Send(addr *net.UDPAddr, data []uint8) (err os.Error) {
+	this.lock.Lock()
+	this.lock.Unlock()
 
 	if cap(this.scratch) == 0 {
-		this.scratch = make([]byte, PacketSize-UdpHeaderSize)
+		this.scratch = make([]uint8, PacketSize-UdpHeaderSize)
 	}
 
 	this.scratch[0] = this.clientId[0]
 	this.scratch[1] = this.clientId[1]
 	this.scratch[2] = 0
 
-	if Compressed && Compress != nil {
-		data = Compress(data)
+	if Compression != nil {
+		data = Compression.Compress(data)
 		this.scratch[2] |= PFCompressed
 	}
 
-	if Encrypted && Encrypt != nil {
-		if data, err = Encrypt(this.GetId(), data); err != nil {
-			return
-		}
+	if Encryption != nil {
+		data = Encryption.Encrypt(this.Id, data)
 		this.scratch[2] |= PFEncrypted
 	}
 
@@ -232,7 +339,7 @@ func (this *Peer) Send(addr string, data []byte) (err os.Error) {
 			cur++
 
 			copy(this.scratch[7:], data)
-			this.conn.out <- newDatagram(udpaddr, this.scratch[0:size+7])
+			this.conn.out <- newDatagram(addr, this.scratch[0:size+7], 0)
 			data = data[size:]
 
 			if len(data) <= size {
@@ -250,7 +357,7 @@ func (this *Peer) Send(addr string, data []byte) (err os.Error) {
 			this.scratch[5] = cur
 			this.scratch[6] = total
 			copy(this.scratch[7:], data)
-			this.conn.out <- newDatagram(udpaddr, this.scratch[0:len(data)+7])
+			this.conn.out <- newDatagram(addr, this.scratch[0:len(data)+7], 0)
 		}
 
 	} else {
@@ -262,14 +369,14 @@ func (this *Peer) Send(addr string, data []byte) (err os.Error) {
 		this.PacketCount++
 
 		copy(this.scratch[5:], data)
-		this.conn.out <- newDatagram(udpaddr, this.scratch[0:len(data)+5])
+		this.conn.out <- newDatagram(addr, this.scratch[0:len(data)+5], 0)
 	}
 	return
 }
 
 // Finds the known peer with the given ID
-func (this *Peer) GetClient(id []byte) *Peer {
-	if p, ok := this.clients[string(id)]; ok {
+func (this *Peer) GetClient(id string) *Peer {
+	if p, ok := this.clients[id]; ok {
 		return p
 	}
 	return nil
@@ -277,14 +384,18 @@ func (this *Peer) GetClient(id []byte) *Peer {
 
 // Adds a new peer to the list of known peers
 func (this *Peer) AddClient(p *Peer) {
-	id := string(p.GetId())
-	if _, ok := this.clients[id]; ok {
+	if _, ok := this.clients[p.Id]; ok {
 		return
 	}
-	this.clients[id] = p
+
+	this.lock.Lock()
+	this.clients[p.Id] = p
+	this.lock.Unlock()
 }
 
 // Removes the known peer with the given id
-func (this *Peer) RemoveClient(id []byte) {
-	this.clients[string(id)] = nil, false
+func (this *Peer) RemoveClient(id string) {
+	this.lock.Lock()
+	this.clients[id] = nil, false
+	this.lock.Unlock()
 }

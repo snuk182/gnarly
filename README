@@ -20,11 +20,20 @@ See client/README and the client code for an example of how it all works.
 
 - Packet compression and encryption can be enabled/disabled.
   You can set (de)compression and (en/de)cryption handlers if you wish to use
-  your own versions of either of these.
+  your own versions of either of these. Note that compression and encryption
+  operates on the full dataset supplied to the Send routine. Any data that
+  requires fragmentation is compressed/encrypted as a whole and then cut into
+  smaller chunks. The library will reassemble the packets on the receiving end
+  and only then decompress/decrypt it all.
 
 - Customizable packet size limit. Defaults to 1400 bytes. This includes the
   22 byte UDP header and a 5 or 7 byte (depending on which flags are set) header
   we use in this library internally.
+
+- Latency tracking for 'connected' peers as well as a timeout mechanism based on
+  a customizable timeout value. Both newly connecting peers and those that
+  time out generate messages you can intercept and act on. Refer to
+  client/client.go to see how this works.
 
 - Supports packet fragmentation. If a chunk of data you want to send exceeds
   the maximum packet size, the library will automatically create multiple
@@ -41,17 +50,6 @@ See client/README and the client code for an example of how it all works.
 ================================================================================
 TODO
 ================================================================================
-
-- Implement latency checking. We opt to periodically send 'PING' packets to a
-  given client instead of embedding a timestamp in every single datagram. 
-  Reason being that the timestamp incurs a considerable size increase in the
-  packet where this is really not necessary. A PING packet is potentially less
-  accurate, because it polls for latency less frequently, but the space we save
-  in each normal packet is well worth it in my opinion.
-
-- Implement timeout mechanism so we can clean out the list of known peers
-  periodically. this should go hand in hand with the Latency checking described
-  above.
 
 - Implement our own default compression and encryption routines. Currently these
   are just empty placeholder functions. The mechanism to make these work on

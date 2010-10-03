@@ -77,8 +77,8 @@ func (this Packet) String() string {
 //     V1 = to_ipv6("123.123.123.123")            // = 16 bytes
 //     V2 = 192.168.1.2 & 0.0.255.255 = 1.2       // = 2 bytes
 //    Joe = md5(V1 + V2)                          // = 16 bytes
-func (this Packet) Owner() []byte {
+func (this Packet) Owner() string {
 	hash := md5.New()
 	hash.Write(this[0:18]) // 16 byte ipv6 address + 2 byte client id
-	return hash.Sum()
+	return string(hash.Sum())
 }

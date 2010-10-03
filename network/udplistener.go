@@ -7,14 +7,16 @@ import "time"
 
 // This represents a single UDP datagram
 type datagram struct {
-	Addr   *net.UDPAddr
-	Packet Packet
+	Addr      *net.UDPAddr
+	Packet    Packet
+	Timestamp int64
 }
 
-func newDatagram(addr *net.UDPAddr, data []byte) *datagram {
+func newDatagram(addr *net.UDPAddr, data []uint8, stamp int64) *datagram {
 	d := new(datagram)
+	d.Timestamp = stamp
 	d.Addr = addr
-	d.Packet = make([]byte, len(data))
+	d.Packet = make([]uint8, len(data))
 	copy(d.Packet, data)
 	return d
 }
@@ -104,21 +106,23 @@ func (this *udpListener) pollIn() {
 	var err os.Error
 	var size int
 	var addr *net.UDPAddr
+	var stamp int64
 
 	datasize := PacketSize - 6 // = PacketSize-UdpHeader+len(ipv6(addr))
-	data := make([]byte, datasize, datasize)
+	data := make([]uint8, datasize, datasize)
 
 	for this.conn != nil && !closed(this.in) && !closed(this.errors) {
 		size, addr, err = this.conn.ReadFromUDP(data[16:]) // leave room for 16-byte address
+		stamp = time.Nanoseconds()
 
 		switch {
 		case err != nil:
 			this.errors <- err
-		case size < 4: // need 3 byte msg header + at least 1 byte data
+		case size < 6: // Need 5 byte msg header + at least 1 byte data (msg id)
 			this.errors <- ErrInvalidPacket
 		default:
 			copy(data, addr.IP.To16())
-			this.in <- newDatagram(addr, data[0:size+16])
+			this.in <- newDatagram(addr, data[0:size+16], stamp)
 		}
 	}
 }

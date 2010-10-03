@@ -28,17 +28,19 @@ func (this *Client) Run(local, public, dest string) (err os.Error) {
 		return
 	}
 
+	var clientid []byte
+	var msg *network.Message
+	var pubaddr *net.UDPAddr
+
 	this.info.Log("Connecting...")
 
 	// Get our clientID from the local IP address
-	var clientid []byte
 	if clientid, err = network.GetClientId(local); err != nil {
 		this.error.Log(err.String())
 		return
 	}
 
 	// Resolve our public IP address
-	var pubaddr *net.UDPAddr
 	if pubaddr, err = net.ResolveUDPAddr(public); err != nil {
 		this.error.Log(err.String())
 		return
@@ -51,30 +53,45 @@ func (this *Client) Run(local, public, dest string) (err os.Error) {
 		return
 	}
 
-	// Start the listener
-	if err = this.peer.Listen(); err != nil {
+	// Start the listener. 10 second ping interval and 3 minute timeout treshold.
+	if err = this.peer.Listen(1e10, 180); err != nil {
 		this.error.Log(err.String())
 		return
 	}
 
-	// Hook up the input polling from stdin.
-	go this.input(dest)
-
 	this.info.Logf("Listening on: %s", public)
-	this.info.Logf("Using client Id: %v", this.peer.GetId())
+	this.info.Logf("Using client Id: %s", this.peer.Id)
 
 	errors := this.peer.Errors()
 	messages := this.peer.Messages()
 
-	var msg *network.Message
+	// Hook up the input polling from stdin.
+	go this.input(dest)
 
 	// Main application loop. Wait for a message, error or a termination signal.
+	// Ideally you should do something useful with the incoming messages. Right
+	// now they are simple plain-text parroting of the commandline input. In a
+	// 'real' aplication, these would be binary encoded messages with specific
+	// functions.
+
+	var client *network.Peer
 
 loop:
 	for {
 		select {
 		case msg = <-messages:
-			this.info.Logf("[%v] -> %s", []byte(msg.PeerId), msg.Data)
+			if client = this.peer.GetClient(msg.PeerId); client != nil {
+				this.info.Logf("Latency: %d microseconds", client.GetLatency())
+			}
+
+			switch msg.Type {
+			case network.MsgPeerConnected:
+				this.info.Logf("Peer connected: %s", msg.PeerId)
+			case network.MsgPeerDisconnected:
+				this.info.Logf("Peer disconnected: %s", msg.PeerId)
+			case network.MsgData:
+				this.info.Logf("Data: %v", string(msg.Data))
+			}
 
 		case err = <-errors:
 			this.error.Log(err.String())
@@ -102,8 +119,16 @@ func (this *Client) Close() {
 }
 
 func (this *Client) input(dest string) {
-	var line []byte
+	var line, data []byte
 	var err os.Error
+	var size int
+
+	var addr *net.UDPAddr
+	if addr, err = net.ResolveUDPAddr(dest); err != nil {
+		return
+	}
+
+	this.info.Log("Type something and hit <enter>:")
 
 	buf := bufio.NewReader(os.Stdin)
 	for {
@@ -116,7 +141,16 @@ func (this *Client) input(dest string) {
 			continue
 		}
 
-		if err = this.peer.Send(dest, line); err != nil {
+		size = len(line) + 1
+		if size >= cap(data) {
+			data = make([]byte, size, size)
+		}
+
+		data = data[0:size]
+		data[0] = network.MsgData
+		copy(data[1:], line)
+
+		if err = this.peer.Send(addr, data); err != nil {
 			this.error.Log(err.String())
 		}
 	}

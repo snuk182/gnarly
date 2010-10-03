@@ -23,63 +23,29 @@ const UdpHeaderSize = 22
 // * 1400 - Maximum size for AOL DSL.
 // *  576 - Typical value to connect to dial-up ISPs. (Default)
 //
-// This value defaults to 1400. This generally seems to be accepted as the most
-// practical default size. It's slightly smaller than a typical Ethernet MTU
-// (Maximum Transmission Unit) and still allows a rather sizable chunk of data
-// to be transfered without the need for fragmentation.
-var PacketSize int = 1400
+// This value defaults to 576. While 1400 is the accepted standard for most
+// modern applications, it does put dial-up users at a disadvantage. 576 bytes
+// ensures maximum compatibility, but If you are not targeting these, we
+// recommend changing this to 1400 byte.
+var PacketSize int = 576
 
-// Used in conjuction with network.PacketLoss. it allows us to arbitrarilly
-// drop a percentage of incoming data to simulate lag or a crappy connection.
-// This is strictly a debugging/testing feature for development purposes. Do not
-// use this in production code.
-var SimulatePacketloss bool = false
+// When set, this will be used to (de)compress packet data if the appropriate
+// flags are set and Compression != nil. While compresion is generally
+// advisable, it can in some cases lead to slower performance without any real
+// reduction in data size. Test this out with the data you intend to send in
+// order to determine if you want compression or not. You can overwrite this
+// with your own compression code by simply implementing the network.Compressor
+// interface and assigning a new instance of that type to this variable. To
+// disable compression, simply set this to nil.
+var Compression Compressor = NewGnarlyCompression()
 
-// Percentage (0-100) of packets that should be considered 'lost'. This is
-// strictly a debugging/testing feature to simulate lag. Leave this at 0 for
-// production code. This will pick random packages up to a given percentage of
-// the total amount of received packets and simply discard them. To enable this
-// feature, set network.SimulatePacketloss to true.
-var Packetloss byte = 0
+// When set, this will be used to (en/de)crypt packet data if the appropriate
+// flags are set and Encryption != nil. You can overwrite this with your
+// own encryption code by simply implementing the network.Encrypter interface
+// and assigning a new instance of that type to this variable. To disable
+// encryption, simply set this to nil.
+var Encryption Encrypter = NewGnarlyEncryption()
 
-// This boolean indicates whether we should compress packet data or not. While
-// this is generally advisable, it can in some cases lead to slower performance
-// without any real reduction in data size. Test this out with the data you
-// intend to send in order to determine if you want compression or not. Default
-// is 'true'. If set to true, this calls network.Compress and network.Decompress
-// functions to do the actual work. You can overwrite these handlers with your
-// own compression handlers.
-var Compressed bool = true
-
-type CompressionHandler func([]byte) []byte
-type DecompressionHandler func([]byte) []byte
-
-// The compression handler. overwrite this with your own compression handler if
-// you do not wish to use the default compression routines.
-var Compress CompressionHandler = func(in []byte) []byte {
-	return in
-}
-
-// The decompression handler. overwrite this with your own compression handler
-// if you do not wish to use the default compression routines.
-var Decompress DecompressionHandler = func(in []byte) []byte {
-	return in
-}
-
-// When set, will call the network.Encrypt and network.Decrypt functions to do
-// the actual transformations. Note that by default these not set.
-// You should assign your own encryption handlers to these variables to perform
-// the actual transformation according to the scheme of your choice.
-var Encrypted bool = true
-
-type EncryptionHandler func(owner, data []byte) ([]byte, os.Error)
-type DecryptionHandler func(owner, data []byte) ([]byte, os.Error)
-
-// This variable should be set to a valid encryption handler if network.Encrypted = true/
-var Encrypt EncryptionHandler
-
-// This variable should be set to a valid decryption handler if network.Encrypted = true
-var Decrypt DecryptionHandler
 
 // Creates a 2 byte ClientID from the given IP address.
 func GetClientId(addr string) (id []byte, err os.Error) {
