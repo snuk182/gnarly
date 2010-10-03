@@ -44,9 +44,10 @@ See client/README and the client code for an example of how it all works.
  
   All if this is completely transparent to the host application. All it will
   deal with is sending any arbitrarilly sized chunk of data and receive it on
-  the other end. It will never know how many packets where involved. It gets
-  a 'network.Message' struct instance containing the entire dataset and the
-  Md5 hash identifying the sender.
+  the other end. It will never know how many packets where involved. The client
+  simply hooks up a function which accepts a peerid, a message type id and the
+  actual complete, reassembled, uncompressed and decrypted dataset; ready for
+  use.
 
 ================================================================================
 TODO
