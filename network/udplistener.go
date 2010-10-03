@@ -24,7 +24,6 @@ func newDatagram(addr *net.UDPAddr, data []uint8, stamp int64) *datagram {
 // This represents the main UDP listening socket. It opens a UDP socket on the
 // given port and polls for incoming packets.
 type udpListener struct {
-	errors  chan os.Error // Any network errors are available in here.
 	in, out chan *datagram
 	lock    *sync.Mutex
 	conn    *net.UDPConn
@@ -49,10 +48,8 @@ func (this *udpListener) Run(addr *net.UDPAddr) (err os.Error) {
 		return
 	}
 
-	this.errors = make(chan os.Error)
 	this.in = make(chan *datagram, 8)
 	this.out = make(chan *datagram, 8)
-
 	this.lock.Unlock()
 
 	go this.pollIn()
@@ -79,24 +76,17 @@ func (this *udpListener) Close() {
 		close(this.out)
 	}
 
-	if !closed(this.errors) {
-		close(this.errors)
-	}
-
 	this.lock.Unlock()
 }
 
 // This polls the outgoing packet channel for data to be sent.
 func (this *udpListener) pollOut() {
 	var dg *datagram
-	var err os.Error
 
 	for this.conn != nil && !closed(this.out) {
 		select {
 		case dg = <-this.out:
-			if _, err = this.conn.WriteToUDP(dg.Packet, dg.Addr); err != nil {
-				this.errors <- err
-			}
+			this.conn.WriteToUDP(dg.Packet, dg.Addr)
 		}
 	}
 }
@@ -111,15 +101,12 @@ func (this *udpListener) pollIn() {
 	datasize := PacketSize - 6 // = PacketSize-UdpHeader+len(ipv6(addr))
 	data := make([]uint8, datasize, datasize)
 
-	for this.conn != nil && !closed(this.in) && !closed(this.errors) {
+	for this.conn != nil && !closed(this.in) {
 		size, addr, err = this.conn.ReadFromUDP(data[16:]) // leave room for 16-byte address
 		stamp = time.Nanoseconds()
 
 		switch {
-		case err != nil:
-			this.errors <- err
-		case size < 6: // Need 5 byte msg header + at least 1 byte data (msg id)
-			this.errors <- ErrInvalidPacket
+		case err != nil || size < 6: // Need 5 byte msg header + at least 1 byte data (msg id)
 		default:
 			copy(data, addr.IP.To16())
 			this.in <- newDatagram(addr, data[0:size+16], stamp)

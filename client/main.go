@@ -7,13 +7,14 @@ func main() {
 	var err os.Error
 
 	if len(os.Args) < 4 {
-		fmt.Fprintf(os.Stderr, "e Missing arguments.\n")
+		fmt.Fprintf(os.Stderr, "[e] Missing arguments.\n")
 		Usage()
 		os.Exit(1)
 	}
 
 	clnt := NewClient()
 	if err = clnt.Run(os.Args[1], os.Args[2], os.Args[3]); err != nil {
+		fmt.Fprintf(os.Stderr, "[e] %v\n", err)
 		os.Exit(1)
 	}
 

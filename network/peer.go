@@ -19,14 +19,14 @@ type Peer struct {
 	lastpacket  int64        // Last packet receive time. Used for timeout detection
 
 	// Fields only used by a listening peer.
-	scratch  []uint8          // A temporary data buffer.
-	conn     *udpListener     // UDP listener.
-	clients  map[string]*Peer // List of known clients we rceived data from in this session.
-	messages chan *Message    // Outgoing messages.
-	cache    []Packet         // Cache of packets. Used when expecting a sequence.
-	ticker   *time.Ticker     // Used for ping requests when this peer is functioning as a listener.
-	lock     *sync.Mutex      // Used to synchronise access to some peer fields.
-	timeout  uint16           // Number of seconds a client can remain unresponsive before we consider it 'disconnected'.
+	onMessage MessageHandler   // function pointer to a message handler
+	scratch   []uint8          // A temporary data buffer.
+	conn      *udpListener     // UDP listener.
+	clients   map[string]*Peer // List of known clients we rceived data from in this session.
+	cache     []Packet         // Cache of packets. Used when expecting a sequence.
+	ticker    *time.Ticker     // Used for ping requests when this peer is functioning as a listener.
+	lock      *sync.Mutex      // Used to synchronise access to some peer fields.
+	timeout   uint16           // Number of seconds a client can remain unresponsive before we consider it 'disconnected'.
 }
 
 // Constructs a new Peer instance
@@ -51,6 +51,7 @@ func NewPeer(addr *net.UDPAddr, clientid []uint8) (p *Peer, err os.Error) {
 	return
 }
 
+// Gets the average roundtrip time for the last 10 Ping packets in microseconds.
 func (this *Peer) GetLatency() uint16 {
 	if this.latencydata[0] == 0 {
 		return 0
@@ -63,7 +64,7 @@ func (this *Peer) GetLatency() uint16 {
 // want between each ping. It is used to measure latency and to detect timeouts.
 // The timeout argument is the number of seconds we should allow a peer to 
 // remain inactive before we consider it 'disconnected'.
-func (this *Peer) Listen(pinginterval uint64, timeout uint16) (err os.Error) {
+func (this *Peer) Listen(pinginterval uint64, timeout uint16, mh MessageHandler) (err os.Error) {
 	if this.conn != nil {
 		return
 	}
@@ -76,12 +77,12 @@ func (this *Peer) Listen(pinginterval uint64, timeout uint16) (err os.Error) {
 		pinginterval = 1e10 // Every 10 seconds = default
 	}
 
-	this.lock = new(sync.Mutex)
+	this.onMessage = mh
 	this.clients = make(map[string]*Peer)
 	this.conn = newUdpListener()
-	this.messages = make(chan *Message)
 	this.ticker = time.NewTicker(int64(pinginterval))
 	this.timeout = timeout
+	this.lock = new(sync.Mutex)
 
 	if err = this.conn.Run(this.Addr); err != nil {
 		return
@@ -100,20 +101,7 @@ func (this *Peer) Listen(pinginterval uint64, timeout uint16) (err os.Error) {
 // extra cost.
 func (this *Peer) ping() {
 	// Use this opportunity to make sure clients have not timed out.
-
-	this.lock.Lock()
-	limit := int64(this.timeout) * 1e9
-	for id := range this.clients {
-		if time.Nanoseconds()-this.clients[id].lastpacket > limit {
-			// This one has exceeded the non-response time limit.
-			// Consider it a lost cause.
-			this.messages <- NewMessage(MsgPeerDisconnected, id, nil)
-			this.clients[id] = nil, false
-		}
-	}
-	this.lock.Unlock()
-
-	// Current time in microseconds
+	// Send current time in microseconds to the remaining clients.
 	ms := time.Nanoseconds() / 1e3
 
 	data := []uint8{
@@ -124,9 +112,20 @@ func (this *Peer) ping() {
 		uint8(ms >> 8), uint8(ms),
 	}
 
-	for _, client := range this.clients {
-		this.Send(client.Addr, data)
+	this.lock.Lock()
+	limit := int64(this.timeout) * 1e9
+	for id := range this.clients {
+		if time.Nanoseconds()-this.clients[id].lastpacket > limit {
+			// This one has exceeded the non-response time limit.
+			// Consider it a lost cause.
+			this.onMessage(this.clients[id], MsgPeerDisconnected, nil)
+			this.clients[id] = nil, false
+			continue
+		}
+
+		this.Send(this.clients[id].Addr, data)
 	}
+	this.lock.Unlock()
 }
 
 // Poll for incoming data
@@ -147,6 +146,7 @@ func (this *Peer) poll() {
 func (this *Peer) handleDatagram(dg *datagram) {
 	var client *Peer
 	var ok bool
+	var data []uint8
 
 	id := dg.Packet.Owner()
 
@@ -155,7 +155,7 @@ func (this *Peer) handleDatagram(dg *datagram) {
 	if client, ok = this.clients[id]; !ok {
 		client, _ = NewPeer(dg.Addr, dg.Packet.ClientId())
 		this.clients[id] = client
-		this.messages <- NewMessage(MsgPeerConnected, id, nil)
+		this.onMessage(this.clients[id], MsgPeerConnected, nil)
 	}
 
 	client.Addr = dg.Addr
@@ -186,7 +186,6 @@ func (this *Peer) handleDatagram(dg *datagram) {
 		}
 
 		// We have all members of the sequence. Reassemble it.
-		var data []uint8
 		buf := bytes.NewBuffer(data)
 
 		this.lock.Lock()
@@ -198,25 +197,9 @@ func (this *Peer) handleDatagram(dg *datagram) {
 		this.cache = this.cache[0:0]
 		this.lock.Unlock()
 
-		data = dg.Packet.Data()
-
-		// Decrypt if necessary.
-		if dg.Packet[18]&PFEncrypted != 0 && Encryption != nil {
-			data = Encryption.Decrypt(id, data)
-		}
-
-		// Decompress if necessary.
-		if dg.Packet[18]&PFCompressed != 0 && Compression != nil {
-			data = Compression.Decompress(data)
-		}
-
-		// Send message with data and peerid. We don't send the whole
-		// peer structure. It can be queried with Peer.GetClient() using
-		// the id in the message. Most of the time the id is all the
-		// host application needs to identify the sender.
-		this.messages <- NewMessage(data[0], id, data[1:])
+		data = buf.Bytes()
 	} else {
-		data := dg.Packet.Data()
+		data = dg.Packet.Data()
 
 		// Check if we got a packet used by this lib internally (eg: ping).
 		// These don't have to be forwarded to the host app.
@@ -244,23 +227,19 @@ func (this *Peer) handleDatagram(dg *datagram) {
 			this.lock.Unlock()
 			return
 		}
-
-		// Decrypt if necessary.
-		if dg.Packet[18]&PFEncrypted != 0 && Encryption != nil {
-			data = Encryption.Decrypt(id, data)
-		}
-
-		// Decompress if necessary.
-		if dg.Packet[18]&PFCompressed != 0 && Compression != nil {
-			data = Compression.Decompress(data)
-		}
-
-		// Send message with data and peerid. We don't send the whole
-		// peer structure. It can be queried with Peer.GetClient() using
-		// the id in the message. Most of the time the id is all the
-		// host application needs to identify the sender.
-		this.messages <- NewMessage(data[0], id, data[1:])
 	}
+
+	// Decrypt if necessary.
+	if dg.Packet[18]&PFEncrypted != 0 && Encryption != nil {
+		data = Encryption.Decrypt(id, data)
+	}
+
+	// Decompress if necessary.
+	if dg.Packet[18]&PFCompressed != 0 && Compression != nil {
+		data = Compression.Decompress(data)
+	}
+
+	this.onMessage(client, data[0], data[1:])
 }
 
 // Close the listener
@@ -280,12 +259,6 @@ func (this *Peer) Close() {
 	this.lock.Unlock()
 	this.lock = nil
 }
-
-// Returns a channel which will push any packet processing errors
-func (this *Peer) Errors() <-chan os.Error { return this.conn.errors }
-
-// Contains incoming messages from unique peers
-func (this *Peer) Messages() <-chan *Message { return this.messages }
 
 // This sends the given data to the given address. It takes care of building
 // the packets with accurate header information. If the length of the supplied
@@ -380,6 +353,12 @@ func (this *Peer) GetClient(id string) *Peer {
 		return p
 	}
 	return nil
+}
+
+// Check to see if the given clientid is still listed.
+func (this *Peer) HasClient(id string) bool {
+	_, ok := this.clients[id]
+	return ok
 }
 
 // Adds a new peer to the list of known peers
