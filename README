@@ -5,7 +5,7 @@
 
 This project is an attempt at a UDP network library. Primarily aimed at games.
 
-Very much Work I progress.
+Very much /work in progress/.
 
 See network/README for a detailed overview of how each packet is constructed.
 See client/README and the client code for an example of how it all works.
