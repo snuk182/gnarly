@@ -10,6 +10,6 @@ const (
 
 	// Dummy value. Used to indicate where a host application should start 
 	// defining it's own message types. MsgMax, MsgMax+1, MsgMax+2 etc.
-	// There is room for 100 custom message types.
-	MsgMax uint8 = 0x9b // 255-100
+	// There is room for 200 custom message types: 55-255
+	MsgMax uint8 = 55
 )

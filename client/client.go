@@ -17,15 +17,15 @@ func NewClient() *Client {
 }
 
 func (this *Client) Run(addr string) (err os.Error) {
-	// Get our clientID from the local IP address
-	var clientid []byte
-	if clientid, err = network.GetClientId(); err != nil {
+	// Resolve/Validate the user supplied address
+	var pubaddr *net.UDPAddr
+	if pubaddr, err = net.ResolveUDPAddr(addr); err != nil {
 		return
 	}
 
-	// Resolve our public IP address
-	var pubaddr *net.UDPAddr
-	if pubaddr, err = net.ResolveUDPAddr(addr); err != nil {
+	// Get our clientID from the local IP address
+	var clientid []byte
+	if clientid, err = network.GetClientId(); err != nil {
 		return
 	}
 
@@ -76,15 +76,16 @@ func (this *Client) Close() {
 }
 
 func (this *Client) onMessage(client *network.Peer, msgtype uint8, data []byte) {
-	//this.info.Logf("Latency: %d microseconds", client.GetLatency())
-
 	switch msgtype {
 	case network.MsgPeerConnected:
 		fmt.Fprintf(os.Stdout, "[i] Peer connected: %v\n", []byte(client.Id))
 	case network.MsgPeerDisconnected:
 		fmt.Fprintf(os.Stdout, "[i] Peer disconnected: %v\n", []byte(client.Id))
 	case network.MsgData:
-		fmt.Fprintf(os.Stdout, "[i] Data: %v\n", string(data))
+		fmt.Fprintf(os.Stdout, "[i] From: %v\n", []byte(client.Id))
+		fmt.Fprintf(os.Stdout, "[i] Latency: %d microseconds, Sequence: 0x%04x\n",
+			client.GetLatency(), client.Sequence)
+		fmt.Fprintf(os.Stdout, "[i] Data: %+v\n\n", data)
 	}
 }
 
@@ -101,6 +102,9 @@ func (this *Client) input(addr *net.UDPAddr) {
 	fmt.Fprint(os.Stdout, "[i] Type some text and hit <enter> or ctrl-c to quit.\n")
 
 	buf := bufio.NewReader(os.Stdin)
+	newline := [2][]byte{[]byte{'\\', 'n'}, []byte{'\n'}}
+	tab := [2][]byte{[]byte{'\\', 'n'}, []byte{'\t'}}
+
 	for {
 		if line, err = buf.ReadBytes('\n'); err != nil {
 			fmt.Fprintf(os.Stderr, "[e] %v\n", err)
@@ -110,6 +114,9 @@ func (this *Client) input(addr *net.UDPAddr) {
 		if line = bytes.TrimSpace(line); len(line) == 0 {
 			continue
 		}
+
+		line = bytes.Join(bytes.Split(line, newline[0], -1), newline[1])
+		line = bytes.Join(bytes.Split(line, tab[0], -1), tab[1])
 
 		size = len(line) + 1
 		if size >= cap(data) {

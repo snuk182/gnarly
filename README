@@ -58,7 +58,12 @@ TODO
   packets is in place and operational; these functions just need something to
   do.
 
-- Implement proper ACK packets. Ideally these should piggyback on other packets.
+- Implement proper packet acknowledgement. Ideally ACK's should piggyback on
+  other packets.
+
+- Write some decent benchmarks.
+
+
 
 --------------------------------------------------------------------------------
  USAGE

@@ -20,7 +20,7 @@ type Peer struct {
 	Id          string       // 16 byte Md5 hash identifying this peer.
 	clientId    []uint8      // 2 byte client id.
 	Addr        *net.UDPAddr // Public address for this peer.
-	PacketCount uint16       // This counter keeps track of the amount of packets we sent to the receiver.
+	Sequence    uint16       // This counter keeps track of the amount of packets we sent to the receiver.
 	latencydata [2]uint32    // Total Packet count and Total Packet rountrip time in microseconds for each PING request.
 	lastpacket  int64        // Last packet receive time. Used for timeout detection.
 	scratch     []uint8      // A temporary data buffer.
@@ -76,6 +76,14 @@ func (this *Peer) Listen(pinginterval uint64, timeout uint16, mh MessageHandler,
 		return
 	}
 
+	if mh == nil {
+		return ErrInvalidMessageHandler
+	}
+
+	if eh == nil {
+		return ErrInvalidErrorHandler
+	}
+
 	if cap(this.scratch) == 0 {
 		this.scratch = make([]uint8, PacketSize-UdpHeaderSize)
 	}
@@ -107,7 +115,7 @@ func (this *Peer) Listen(pinginterval uint64, timeout uint16, mh MessageHandler,
 // require a 64 bit integer. So the extra percision of microseconds adds no
 // extra cost.
 func (this *Peer) ping() {
-	// Send current time in microseconds to the remaining clients.
+	// Send current time in microseconds to clients.
 	// Use this opportunity to make sure clients have not timed out.
 	ms := time.Nanoseconds() / 1e3
 
@@ -143,6 +151,7 @@ func (this *Peer) poll() {
 	var addr *net.UDPAddr
 	var stamp int64
 	var ok bool
+	var i int
 
 	datasize := PacketSize - 6 // = PacketSize-UdpHeader+len(ipv6(addr))
 	data := make([]uint8, datasize, datasize)
@@ -166,13 +175,16 @@ loop:
 				break loop
 			}
 		default:
-			copy(data, addr.IP.To16())
-			go this.handleDatagram(addr, data[0:size+16], stamp)
+			//copy(data, addr.IP.To16())
+			for i = 0; i < 16; i++ {
+				data[i] = addr.IP[i]
+			}
+			go this.process(addr, data[0:size+16], stamp)
 		}
 	}
 }
 
-func (this *Peer) handleDatagram(addr *net.UDPAddr, packet Packet, stamp int64) {
+func (this *Peer) process(addr *net.UDPAddr, packet Packet, stamp int64) {
 	var client *Peer
 	var ok bool
 	var data []uint8
@@ -192,7 +204,7 @@ func (this *Peer) handleDatagram(addr *net.UDPAddr, packet Packet, stamp int64) 
 
 	this.lock.Lock()
 	client.Addr = addr
-	client.PacketCount = packet.Sequence()
+	client.Sequence = packet.Sequence()
 	client.lastpacket = stamp
 	this.lock.Unlock()
 
@@ -337,10 +349,10 @@ func (this *Peer) Send(addr *net.UDPAddr, data []uint8) (err os.Error) {
 
 		// Build and send as many packets as needed.
 		for {
-			// FIXME(jimt): Handle wrapping of this.PacketCount value if it exceeds uint16
-			this.scratch[3] = uint8(this.PacketCount >> 8)
-			this.scratch[4] = uint8(this.PacketCount)
-			this.PacketCount++
+			// FIXME(jimt): Handle wrapping of this.Sequence value if it exceeds uint16
+			this.scratch[3] = uint8(this.Sequence >> 8)
+			this.scratch[4] = uint8(this.Sequence)
+			this.Sequence++
 
 			this.scratch[5] = cur
 			this.scratch[6] = total
@@ -359,10 +371,10 @@ func (this *Peer) Send(addr *net.UDPAddr, data []uint8) (err os.Error) {
 
 		// Send any remaining data
 		if len(data) > 0 {
-			// FIXME(jimt): Handle wrapping of this.PacketCount value if it exceeds uint16
-			this.scratch[3] = uint8(this.PacketCount >> 8)
-			this.scratch[4] = uint8(this.PacketCount)
-			this.PacketCount++
+			// FIXME(jimt): Handle wrapping of this.Sequence value if it exceeds uint16
+			this.scratch[3] = uint8(this.Sequence >> 8)
+			this.scratch[4] = uint8(this.Sequence)
+			this.Sequence++
 
 			this.scratch[5] = cur
 			this.scratch[6] = total
@@ -374,10 +386,10 @@ func (this *Peer) Send(addr *net.UDPAddr, data []uint8) (err os.Error) {
 	} else {
 		// Single packet. Just send as-is
 
-		// FIXME(jimt): Handle wrapping of this.PacketCount value if it exceeds uint16
-		this.scratch[3] = uint8(this.PacketCount >> 8)
-		this.scratch[4] = uint8(this.PacketCount)
-		this.PacketCount++
+		// FIXME(jimt): Handle wrapping of this.Sequence value if it exceeds uint16
+		this.scratch[3] = uint8(this.Sequence >> 8)
+		this.scratch[4] = uint8(this.Sequence)
+		this.Sequence++
 
 		copy(this.scratch[5:], data)
 		return this.send(addr, this.scratch[0:len(data)+5])
