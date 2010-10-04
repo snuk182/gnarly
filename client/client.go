@@ -89,7 +89,7 @@ func (this *Client) onMessage(client *network.Peer, msgtype uint8, data []byte) 
 }
 
 func (this *Client) onError(err os.Error) bool {
-	fmt.Fprintf(os.Stderr, "[e] %v%v\n", err)
+	fmt.Fprintf(os.Stderr, "[e] %v\n", err)
 	return false
 }
 
