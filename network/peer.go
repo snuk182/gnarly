@@ -16,12 +16,12 @@ type Peer struct {
 	Addr        *net.UDPAddr // Public address for this peer.
 	PacketCount uint16       // This counter keeps track of the amount of packets we sent to the receiver.
 	latencydata [2]uint32    // Total Packet count and Total Packet rountrip time in microseconds for each PING request.
-	lastpacket  int64        // Last packet receive time. Used for timeout detection
+	lastpacket  int64        // Last packet receive time. Used for timeout detection.
+	scratch     []uint8      // A temporary data buffer.
 
 	// Fields only used by a listening peer.
-	onMessage MessageHandler   // function pointer to a message handler
-	scratch   []uint8          // A temporary data buffer.
-	conn      *udpListener     // UDP listener.
+	onMessage MessageHandler   // function pointer to a message handler.
+	udp       *udpListener     // UDP listener.
 	clients   map[string]*Peer // List of known clients we rceived data from in this session.
 	cache     []Packet         // Cache of packets. Used when expecting a sequence.
 	ticker    *time.Ticker     // Used for ping requests when this peer is functioning as a listener.
@@ -65,7 +65,7 @@ func (this *Peer) GetLatency() uint16 {
 // The timeout argument is the number of seconds we should allow a peer to 
 // remain inactive before we consider it 'disconnected'.
 func (this *Peer) Listen(pinginterval uint64, timeout uint16, mh MessageHandler) (err os.Error) {
-	if this.conn != nil {
+	if this.udp != nil {
 		return
 	}
 
@@ -79,12 +79,12 @@ func (this *Peer) Listen(pinginterval uint64, timeout uint16, mh MessageHandler)
 
 	this.onMessage = mh
 	this.clients = make(map[string]*Peer)
-	this.conn = newUdpListener()
+	this.udp = newUdpListener()
 	this.ticker = time.NewTicker(int64(pinginterval))
 	this.timeout = timeout
 	this.lock = new(sync.Mutex)
 
-	if err = this.conn.Run(this.Addr); err != nil {
+	if err = this.udp.Run(this.Addr); err != nil {
 		return
 	}
 
@@ -133,12 +133,12 @@ func (this *Peer) ping() {
 func (this *Peer) poll() {
 	var dg *datagram
 
-	for this.conn != nil && this.ticker != nil {
+	for this.udp != nil && this.ticker != nil {
 		select {
 		case _ = <-this.ticker.C:
 			go this.ping()
 
-		case dg = <-this.conn.in:
+		case dg = <-this.udp.in:
 			go this.handleDatagram(dg)
 		}
 	}
@@ -255,9 +255,9 @@ func (this *Peer) Close() {
 		this.ticker = nil
 	}
 
-	if this.conn != nil {
-		this.conn.Close()
-		this.conn = nil
+	if this.udp != nil {
+		this.udp.Close()
+		this.udp = nil
 	}
 
 	this.lock.Unlock()
@@ -316,7 +316,7 @@ func (this *Peer) Send(addr *net.UDPAddr, data []uint8) (err os.Error) {
 			cur++
 
 			copy(this.scratch[7:], data)
-			this.conn.out <- newDatagram(addr, this.scratch[0:size+7], 0)
+			this.udp.out <- newDatagram(addr, this.scratch[0:size+7], 0)
 			data = data[size:]
 
 			if len(data) <= size {
@@ -334,7 +334,8 @@ func (this *Peer) Send(addr *net.UDPAddr, data []uint8) (err os.Error) {
 			this.scratch[5] = cur
 			this.scratch[6] = total
 			copy(this.scratch[7:], data)
-			this.conn.out <- newDatagram(addr, this.scratch[0:len(data)+7], 0)
+
+			return this.send(addr, this.scratch[0:len(data)+7])
 		}
 
 	} else {
@@ -346,8 +347,28 @@ func (this *Peer) Send(addr *net.UDPAddr, data []uint8) (err os.Error) {
 		this.PacketCount++
 
 		copy(this.scratch[5:], data)
-		this.conn.out <- newDatagram(addr, this.scratch[0:len(data)+5], 0)
+		return this.send(addr, this.scratch[0:len(data)+5])
 	}
+	return
+}
+
+// Called from Peer.Send()
+func (this *Peer) send(addr *net.UDPAddr, data []uint8) (err os.Error) {
+	if this.udp != nil {
+		// If this is a listening peer, just reuse the existing connection for sending.
+		_, err = this.udp.conn.WriteToUDP(data, addr)
+	} else {
+		// Otherwise, create a new one.
+		var conn *net.UDPConn
+
+		if conn, err = net.DialUDP("udp", nil, addr); err != nil {
+			return
+		}
+
+		defer conn.Close()
+		_, err = conn.WriteToUDP(data, addr)
+	}
+
 	return
 }
 

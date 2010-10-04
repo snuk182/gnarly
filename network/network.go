@@ -2,6 +2,7 @@ package network
 
 import "os"
 import "net"
+import "strings"
 
 // This is the size of a standard UDP datagram header. it is part of every
 // packet we send. This header is processed by the operating system's transport
@@ -47,23 +48,32 @@ var Compression Compressor = NewGnarlyCompression()
 var Encryption Encrypter = NewGnarlyEncryption()
 
 
-// Creates a 2 byte ClientID from the given IP address.
-func GetClientId(addr string) (id []byte, err os.Error) {
-	if len(addr) < 3 {
-		return nil, ErrInvalidClientID
+// Creates a 2 byte ClientID from the local machine's IP.
+func GetClientId() (id []byte, err os.Error) {
+	var conn *net.UDPConn
+	var addr *net.UDPAddr
+
+	// Connect to a random machine somewhere in this subnet. It's irrelevant
+	// where to, as long as it's not the loopback address.
+	if addr, err = net.ResolveUDPAddr("192.168.1.1:0"); err != nil {
+		return
 	}
 
-	if addr[0] == '[' {
-		addr = addr[1:]
+	if conn, err = net.DialUDP("udp", nil, addr); err != nil {
+		return
 	}
 
-	if addr[len(addr)-1] == ']' {
-		addr = addr[0 : len(addr)-1]
+	defer conn.Close()
+
+	// strip port number off.
+	str := conn.LocalAddr().String()
+	if idx := strings.LastIndex(str, ":"); idx != -1 {
+		str = str[0:idx]
 	}
 
 	var ip net.IP
-	if ip = net.ParseIP(addr).To16(); ip == nil {
-		return nil, ErrInvalidClientID
+	if ip = net.ParseIP(str).To16(); ip == nil {
+		return
 	}
 
 	// TODO(jimt): I am unsure how 2 full IPv6 addresses in the same subnet relate

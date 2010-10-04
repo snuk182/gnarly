@@ -49,11 +49,9 @@ func (this *udpListener) Run(addr *net.UDPAddr) (err os.Error) {
 	}
 
 	this.in = make(chan *datagram, 8)
-	this.out = make(chan *datagram, 8)
 	this.lock.Unlock()
 
 	go this.pollIn()
-	go this.pollOut()
 	return
 }
 
@@ -72,23 +70,7 @@ func (this *udpListener) Close() {
 		close(this.in)
 	}
 
-	if !closed(this.out) {
-		close(this.out)
-	}
-
 	this.lock.Unlock()
-}
-
-// This polls the outgoing packet channel for data to be sent.
-func (this *udpListener) pollOut() {
-	var dg *datagram
-
-	for this.conn != nil && !closed(this.out) {
-		select {
-		case dg = <-this.out:
-			this.conn.WriteToUDP(dg.Packet, dg.Addr)
-		}
-	}
 }
 
 // This polls the listening socket for incoming packets.

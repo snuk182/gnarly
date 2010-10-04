@@ -60,14 +60,6 @@ TODO
 
 - Implement proper ACK packets. Ideally these should piggyback on other packets.
 
-- Resolve local (NAT/LAN) ip address for a client. This is needed to calculate
-  the 2 byte clientid. Currently the Go network lib only yields the loopback
-  address when resolving the hostname. We need to get it to spit out the DHCP
-  address if any. Possibly by querying the network interfaces directly.
-  
-  The client program requires us to specify this local IP manually through a 
-  commandline parameter. This is obviously not desirable.
-
 --------------------------------------------------------------------------------
  USAGE
 --------------------------------------------------------------------------------

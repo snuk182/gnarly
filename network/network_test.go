@@ -2,6 +2,6 @@ package network
 
 import "testing"
 
-func Test(t *testing.T) {
+func TestHosts(t *testing.T) {
 
 }

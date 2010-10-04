@@ -16,23 +16,16 @@ func NewClient() *Client {
 	return new(Client)
 }
 
-func (this *Client) Run(local, public, dest string) (err os.Error) {
-	if this.peer != nil {
-		return
-	}
-
-	var clientid []byte
-	var pubaddr *net.UDPAddr
-
-	fmt.Fprint(os.Stdout, "[i] Connecting...\n")
-
+func (this *Client) Run(addr string) (err os.Error) {
 	// Get our clientID from the local IP address
-	if clientid, err = network.GetClientId(local); err != nil {
+	var clientid []byte
+	if clientid, err = network.GetClientId(); err != nil {
 		return
 	}
 
 	// Resolve our public IP address
-	if pubaddr, err = net.ResolveUDPAddr(public); err != nil {
+	var pubaddr *net.UDPAddr
+	if pubaddr, err = net.ResolveUDPAddr(addr); err != nil {
 		return
 	}
 
@@ -51,10 +44,10 @@ func (this *Client) Run(local, public, dest string) (err os.Error) {
 		return
 	}
 
-	fmt.Fprintf(os.Stdout, "[i] Listening on: %s\n", public)
+	fmt.Fprintf(os.Stdout, "[i] Listening on: %v\n", pubaddr)
 
 	// Hook up the input polling from stdin.
-	go this.input(dest)
+	go this.input(pubaddr)
 
 loop:
 	for {
@@ -94,17 +87,12 @@ func (this *Client) onMessage(client *network.Peer, msgtype uint8, data []byte) 
 	}
 }
 
-func (this *Client) input(dest string) {
+func (this *Client) input(addr *net.UDPAddr) {
 	var line, data []byte
 	var err os.Error
 	var size int
 
-	var addr *net.UDPAddr
-	if addr, err = net.ResolveUDPAddr(dest); err != nil {
-		return
-	}
-
-	fmt.Fprint(os.Stdout, "[i] Type something and hit <enter>\n")
+	fmt.Fprint(os.Stdout, "[i] Type some text and hit <enter> or ctrl-c to quit.\n")
 
 	buf := bufio.NewReader(os.Stdin)
 	for {
