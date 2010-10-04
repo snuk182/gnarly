@@ -37,10 +37,11 @@ func (this *Client) Run(addr string) (err os.Error) {
 
 	// Create a message handler. We need a closure, because we can't pass
 	// a struct method as a function 'pointer'.
-	handler := func(c *network.Peer, mt uint8, d []byte) { this.onMessage(c, mt, d) }
+	mh := func(c *network.Peer, mt uint8, d []byte) { this.onMessage(c, mt, d) }
+	eh := func(err os.Error) bool { return this.onError(err) }
 
 	// Start the listener. 5 second ping interval and 3 minute timeout treshold.
-	if err = this.peer.Listen(5e9, 180, handler); err != nil {
+	if err = this.peer.Listen(5e9, 180, mh, eh); err != nil {
 		return
 	}
 
@@ -85,6 +86,11 @@ func (this *Client) onMessage(client *network.Peer, msgtype uint8, data []byte) 
 	case network.MsgData:
 		fmt.Fprintf(os.Stdout, "[i] Data: %v\n", string(data))
 	}
+}
+
+func (this *Client) onError(err os.Error) bool {
+	fmt.Fprintf(os.Stderr, "[e] %v%v\n", err)
+	return false
 }
 
 func (this *Client) input(addr *net.UDPAddr) {

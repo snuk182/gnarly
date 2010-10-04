@@ -1,8 +1,5 @@
 package network
 
-// This type represents a function handler for dealing with incoming messages.
-type MessageHandler func(client *Peer, msgtype uint8, data []uint8)
-
 // Message types
 const (
 	MsgData             uint8 = iota // Generic data packet. No specific message implied.

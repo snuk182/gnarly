@@ -7,6 +7,12 @@ import "time"
 import "sync"
 import "crypto/md5"
 
+// This type represents a function handler for dealing with incoming messages.
+type MessageHandler func(client *Peer, msgtype uint8, data []uint8)
+
+// This type represents a function handler for dealing with error messages.
+type ErrorHandler func(err os.Error) bool
+
 // This represents a unique client connecting to our machine. This structure
 // maintains some counters and buffers used for reliable identification and
 // caching of the data packets sent to/from said client.
@@ -21,7 +27,8 @@ type Peer struct {
 
 	// Fields only used by a listening peer.
 	onMessage MessageHandler   // function pointer to a message handler.
-	udp       *udpListener     // UDP listener.
+	onError   ErrorHandler     // function pointer to error handler
+	udp       *net.UDPConn     // Our UDP listener socket.
 	clients   map[string]*Peer // List of known clients we rceived data from in this session.
 	cache     []Packet         // Cache of packets. Used when expecting a sequence.
 	ticker    *time.Ticker     // Used for ping requests when this peer is functioning as a listener.
@@ -64,7 +71,7 @@ func (this *Peer) GetLatency() uint16 {
 // want between each ping. It is used to measure latency and to detect timeouts.
 // The timeout argument is the number of seconds we should allow a peer to 
 // remain inactive before we consider it 'disconnected'.
-func (this *Peer) Listen(pinginterval uint64, timeout uint16, mh MessageHandler) (err os.Error) {
+func (this *Peer) Listen(pinginterval uint64, timeout uint16, mh MessageHandler, eh ErrorHandler) (err os.Error) {
 	if this.udp != nil {
 		return
 	}
@@ -78,13 +85,13 @@ func (this *Peer) Listen(pinginterval uint64, timeout uint16, mh MessageHandler)
 	}
 
 	this.onMessage = mh
+	this.onError = eh
 	this.clients = make(map[string]*Peer)
-	this.udp = newUdpListener()
 	this.ticker = time.NewTicker(int64(pinginterval))
 	this.timeout = timeout
 	this.lock = new(sync.Mutex)
 
-	if err = this.udp.Run(this.Addr); err != nil {
+	if this.udp, err = net.ListenUDP("udp", this.Addr); err != nil {
 		return
 	}
 
@@ -131,29 +138,50 @@ func (this *Peer) ping() {
 
 // Poll for incoming data
 func (this *Peer) poll() {
-	var dg *datagram
+	var err os.Error
+	var size int
+	var addr *net.UDPAddr
+	var stamp int64
+	var ok bool
 
-	for this.udp != nil && this.ticker != nil {
-		select {
-		case _ = <-this.ticker.C:
+	datasize := PacketSize - 6 // = PacketSize-UdpHeader+len(ipv6(addr))
+	data := make([]uint8, datasize, datasize)
+
+loop:
+	for this.udp != nil {
+		if _, ok = <-this.ticker.C; ok {
 			go this.ping()
+		}
 
-		case dg = <-this.udp.in:
-			go this.handleDatagram(dg)
+		size, addr, err = this.udp.ReadFromUDP(data[16:]) // leave room for 16-byte address
+		stamp = time.Nanoseconds()
+
+		switch {
+		case err != nil:
+			if this.onError(err) {
+				break loop
+			}
+		case size < 6: // Need 5 byte msg header + at least 1 byte data (msg id)
+			if this.onError(ErrInvalidPacket) {
+				break loop
+			}
+		default:
+			copy(data, addr.IP.To16())
+			go this.handleDatagram(addr, data[0:size+16], stamp)
 		}
 	}
 }
 
-func (this *Peer) handleDatagram(dg *datagram) {
+func (this *Peer) handleDatagram(addr *net.UDPAddr, packet Packet, stamp int64) {
 	var client *Peer
 	var ok bool
 	var data []uint8
 
-	id := dg.Packet.Owner()
+	id := packet.Owner()
 
 	// Create or update peer (owner of packet).
 	if client, ok = this.clients[id]; !ok {
-		client, _ = NewPeer(dg.Addr, dg.Packet.ClientId())
+		client, _ = NewPeer(addr, packet.ClientId())
 
 		this.lock.Lock()
 		this.clients[id] = client
@@ -163,22 +191,22 @@ func (this *Peer) handleDatagram(dg *datagram) {
 	}
 
 	this.lock.Lock()
-	client.Addr = dg.Addr
-	client.PacketCount = dg.Packet.Sequence()
-	client.lastpacket = dg.Timestamp
+	client.Addr = addr
+	client.PacketCount = packet.Sequence()
+	client.lastpacket = stamp
 	this.lock.Unlock()
 
-	if dg.Packet[18]&PFFragmented != 0 {
+	if packet[18]&PFFragmented != 0 {
 		// This packet is part of a sequence. We need to store it and
 		// make sure we get all of them. We can then reassemble the
 		// original dataset.
 
-		s1, s2 := dg.Packet.SubSequence()
+		s1, s2 := packet.SubSequence()
 		this.lock.Lock()
 		if int(s2) > len(this.cache) {
 			this.cache = make([]Packet, s2)
 		}
-		this.cache[s1] = dg.Packet
+		this.cache[s1] = packet
 		this.lock.Unlock()
 
 		// Check if we have all of them
@@ -203,14 +231,14 @@ func (this *Peer) handleDatagram(dg *datagram) {
 
 		data = buf.Bytes()
 	} else {
-		data = dg.Packet.Data()
+		data = packet.Data()
 
 		// Check if we got a packet used by this lib internally (eg: ping).
 		// These don't have to be forwarded to the host app.
 		switch data[0] {
 		case MsgPing: // respond with supplied timestamp
 			data[0] = MsgPong
-			this.Send(dg.Addr, data)
+			this.Send(addr, data)
 			return
 
 		case MsgPong: // Calculate latency from packet rounttrip time.
@@ -234,12 +262,12 @@ func (this *Peer) handleDatagram(dg *datagram) {
 	}
 
 	// Decrypt if necessary.
-	if dg.Packet[18]&PFEncrypted != 0 && Encryption != nil {
+	if packet[18]&PFEncrypted != 0 && Encryption != nil {
 		data = Encryption.Decrypt(id, data)
 	}
 
 	// Decompress if necessary.
-	if dg.Packet[18]&PFCompressed != 0 && Compression != nil {
+	if packet[18]&PFCompressed != 0 && Compression != nil {
 		data = Compression.Decompress(data)
 	}
 
@@ -259,6 +287,9 @@ func (this *Peer) Close() {
 		this.udp.Close()
 		this.udp = nil
 	}
+
+	// Give code some time to break out of polling loop
+	time.Sleep(1e9)
 
 	this.lock.Unlock()
 	this.lock = nil
@@ -316,7 +347,9 @@ func (this *Peer) Send(addr *net.UDPAddr, data []uint8) (err os.Error) {
 			cur++
 
 			copy(this.scratch[7:], data)
-			this.udp.out <- newDatagram(addr, this.scratch[0:size+7], 0)
+			if err = this.send(addr, this.scratch[0:size+7]); err != nil {
+				return
+			}
 			data = data[size:]
 
 			if len(data) <= size {
@@ -356,7 +389,7 @@ func (this *Peer) Send(addr *net.UDPAddr, data []uint8) (err os.Error) {
 func (this *Peer) send(addr *net.UDPAddr, data []uint8) (err os.Error) {
 	if this.udp != nil {
 		// If this is a listening peer, just reuse the existing connection for sending.
-		_, err = this.udp.conn.WriteToUDP(data, addr)
+		_, err = this.udp.WriteToUDP(data, addr)
 	} else {
 		// Otherwise, create a new one.
 		var conn *net.UDPConn
