@@ -103,7 +103,7 @@ func (this *Client) input(addr *net.UDPAddr) {
 
 	buf := bufio.NewReader(os.Stdin)
 	newline := [2][]byte{[]byte{'\\', 'n'}, []byte{'\n'}}
-	tab := [2][]byte{[]byte{'\\', 'n'}, []byte{'\t'}}
+	tab := [2][]byte{[]byte{'\\', 't'}, []byte{'\t'}}
 
 	for {
 		if line, err = buf.ReadBytes('\n'); err != nil {
