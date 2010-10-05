@@ -37,7 +37,7 @@ func (this *Client) Run(addr string) (err os.Error) {
 
 	// Create a message handler. We need a closure, because we can't pass
 	// a struct method as a function 'pointer'.
-	mh := func(c *network.Peer, mt uint8, d []byte) { this.onMessage(c, mt, d) }
+	mh := func(c *network.Peer, mt uint8, d interface{}) { this.onMessage(c, mt, d) }
 	eh := func(err os.Error) bool { return this.onError(err) }
 
 	// Start the listener. 5 second ping interval and 3 minute timeout treshold.
@@ -75,17 +75,18 @@ func (this *Client) Close() {
 	}
 }
 
-func (this *Client) onMessage(client *network.Peer, msgtype uint8, data []byte) {
+func (this *Client) onMessage(peer *network.Peer, msgtype uint8, data interface{}) {
 	switch msgtype {
 	case network.MsgPeerConnected:
-		fmt.Fprintf(os.Stdout, "[i] Peer connected: %v\n", []byte(client.Id))
+		fmt.Fprintf(os.Stdout, "[i] Peer connected: %s\n", peer.Id)
 	case network.MsgPeerDisconnected:
-		fmt.Fprintf(os.Stdout, "[i] Peer disconnected: %v\n", []byte(client.Id))
+		fmt.Fprintf(os.Stdout, "[i] Peer disconnected: %s\n", peer.Id)
+	case network.MsgLatency:
+		fmt.Fprintf(os.Stdout, "[i] Latency for %v: %d microseconds\n", peer.Id, data.(uint16))
 	case network.MsgData:
-		fmt.Fprintf(os.Stdout, "[i] From: %v\n", []byte(client.Id))
-		fmt.Fprintf(os.Stdout, "[i] Latency: %d microseconds, Sequence: 0x%04x\n",
-			client.GetLatency(), client.Sequence)
-		fmt.Fprintf(os.Stdout, "[i] Data: %+v\n\n", data)
+		fmt.Fprintf(os.Stdout, "[i] From: %v\n", peer.Id)
+		fmt.Fprintf(os.Stdout, "[i] Sequence #: 0x%04x\n", peer.Sequence)
+		fmt.Fprintf(os.Stdout, "[i] Data: %+v\n\n", data.([]byte))
 	}
 }
 

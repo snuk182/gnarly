@@ -6,9 +6,10 @@ import "bytes"
 import "time"
 import "sync"
 import "crypto/md5"
+import "encoding/base64"
 
 // This type represents a function handler for dealing with incoming messages.
-type MessageHandler func(client *Peer, msgtype uint8, data []uint8)
+type MessageHandler func(client *Peer, msgtype uint8, data interface{})
 
 // This type represents a function handler for dealing with error messages.
 type ErrorHandler func(err os.Error) bool
@@ -17,7 +18,7 @@ type ErrorHandler func(err os.Error) bool
 // maintains some counters and buffers used for reliable identification and
 // caching of the data packets sent to/from said client.
 type Peer struct {
-	Id          string       // 16 byte Md5 hash identifying this peer.
+	Id          string       // 24 byte base64 encoded Md5 hash identifying this peer.
 	clientId    []uint8      // 2 byte client id.
 	Addr        *net.UDPAddr // Public address for this peer.
 	Sequence    uint16       // This counter keeps track of the amount of packets we sent to the receiver.
@@ -47,23 +48,22 @@ func NewPeer(addr *net.UDPAddr, clientid []uint8) (p *Peer, err os.Error) {
 	p.Addr = addr
 
 	var d []uint8
-
 	buf := bytes.NewBuffer(d)
 	buf.Write(addr.IP.To16())
 	buf.Write(clientid)
 
 	hash := md5.New()
 	hash.Write(buf.Bytes())
-	p.Id = string(hash.Sum())
-	return
-}
 
-// Gets the average roundtrip time for the last 10 Ping packets in microseconds.
-func (this *Peer) GetLatency() uint16 {
-	if this.latencydata[0] == 0 {
-		return 0
+	buf.Truncate(0)
+	enc := base64.NewEncoder(base64.StdEncoding, buf)
+	if _, err = enc.Write(hash.Sum()); err != nil {
+		enc.Close()
+		return nil, ErrInvalidClientID
 	}
-	return uint16(this.latencydata[1] / this.latencydata[0])
+	enc.Close()
+	p.Id = buf.String()
+	return
 }
 
 // Begin listening on the public IP/port. Specify the interval at which you
@@ -84,12 +84,15 @@ func (this *Peer) Listen(pinginterval uint64, timeout uint16, mh MessageHandler,
 		return ErrInvalidErrorHandler
 	}
 
-	if cap(this.scratch) == 0 {
-		this.scratch = make([]uint8, PacketSize-UdpHeaderSize)
-	}
-
 	if pinginterval == 0 {
 		pinginterval = 1e10 // Every 10 seconds = default
+	}
+
+	this.lock = new(sync.Mutex)
+	this.lock.Lock()
+
+	if cap(this.scratch) == 0 {
+		this.scratch = make([]uint8, PacketSize-UdpHeaderSize)
 	}
 
 	this.onMessage = mh
@@ -97,50 +100,62 @@ func (this *Peer) Listen(pinginterval uint64, timeout uint16, mh MessageHandler,
 	this.clients = make(map[string]*Peer)
 	this.ticker = time.NewTicker(int64(pinginterval))
 	this.timeout = timeout
-	this.lock = new(sync.Mutex)
+	this.lock.Unlock()
 
 	if this.udp, err = net.ListenUDP("udp", this.Addr); err != nil {
 		return
 	}
 
 	go this.poll()
+	go this.ping()
 	return
 }
 
 // Ping every known client. We send a 64 bit timestamp. This is the current time
 // in microseconds. This kind of precision adds some packet size overhead as
 // opposed to a regular 4 byte unix timestamp, but we get better timing info.
-// These packets are also only send at low intervals, so the extra 4 bytes are
+// These packets are also only sent at low intervals, so the extra 4 bytes are
 // not going to be a problem. We could use milliseconds, but that would still
-// require a 64 bit integer. So the extra percision of microseconds adds no
+// require a 64 bit integer. So the extra precision of microseconds adds no
 // extra cost.
 func (this *Peer) ping() {
-	// Send current time in microseconds to clients.
-	// Use this opportunity to make sure clients have not timed out.
-	ms := time.Nanoseconds() / 1e3
-
-	data := []uint8{
-		MsgPing,
-		uint8(ms >> 56), uint8(ms >> 48),
-		uint8(ms >> 40), uint8(ms >> 32),
-		uint8(ms >> 24), uint8(ms >> 16),
-		uint8(ms >> 8), uint8(ms),
-	}
+	var ms int64
+	var id string
 
 	limit := int64(this.timeout) * 1e9
-	for id := range this.clients {
-		if time.Nanoseconds()-this.clients[id].lastpacket > limit {
-			// This one has exceeded the non-response time limit.
-			// Consider it a lost cause.
-			this.onMessage(this.clients[id], MsgPeerDisconnected, nil)
+	data := make([]uint8, 9)
+	data[0] = MsgPing
 
-			this.lock.Lock()
-			this.clients[id] = nil, false
-			this.lock.Unlock()
-			continue
+	for {
+		select {
+		case _ = <-this.ticker.C:
+			for id = range this.clients {
+				if time.Nanoseconds()-this.clients[id].lastpacket > limit {
+					// This one has exceeded the non-response time limit.
+					// Consider it a lost cause.
+					this.onMessage(this.clients[id], MsgPeerDisconnected, nil)
+
+					this.lock.Lock()
+					this.clients[id] = nil, false
+					this.lock.Unlock()
+					continue
+				}
+
+				// Send current time in microseconds to clients.
+				// Use this opportunity to make sure clients have not timed out.
+				ms = time.Nanoseconds() / 1e3
+
+				data[1] = uint8(ms >> 56)
+				data[2] = uint8(ms >> 48)
+				data[3] = uint8(ms >> 40)
+				data[4] = uint8(ms >> 32)
+				data[5] = uint8(ms >> 24)
+				data[6] = uint8(ms >> 16)
+				data[7] = uint8(ms >> 8)
+				data[8] = uint8(ms)
+				this.Send(this.clients[id].Addr, data)
+			}
 		}
-
-		this.Send(this.clients[id].Addr, data)
 	}
 }
 
@@ -150,7 +165,6 @@ func (this *Peer) poll() {
 	var size int
 	var addr *net.UDPAddr
 	var stamp int64
-	var ok bool
 	var i int
 
 	datasize := PacketSize - 6 // = PacketSize-UdpHeader+len(ipv6(addr))
@@ -158,10 +172,6 @@ func (this *Peer) poll() {
 
 loop:
 	for this.udp != nil {
-		if _, ok = <-this.ticker.C; ok {
-			go this.ping()
-		}
-
 		size, addr, err = this.udp.ReadFromUDP(data[16:]) // leave room for 16-byte address
 		stamp = time.Nanoseconds()
 
@@ -179,7 +189,7 @@ loop:
 			for i = 0; i < 16; i++ {
 				data[i] = addr.IP[i]
 			}
-			go this.process(addr, data[0:size+16], stamp)
+			this.process(addr, data[0:size+16], stamp)
 		}
 	}
 }
@@ -244,33 +254,6 @@ func (this *Peer) process(addr *net.UDPAddr, packet Packet, stamp int64) {
 		data = buf.Bytes()
 	} else {
 		data = packet.Data()
-
-		// Check if we got a packet used by this lib internally (eg: ping).
-		// These don't have to be forwarded to the host app.
-		switch data[0] {
-		case MsgPing: // respond with supplied timestamp
-			data[0] = MsgPong
-			this.Send(addr, data)
-			return
-
-		case MsgPong: // Calculate latency from packet rounttrip time.
-			cms := time.Nanoseconds() / 1e3
-			oms := int64(data[1])<<56 | int64(data[2])<<48 | int64(data[3])<<40 |
-				int64(data[4])<<32 | int64(data[5])<<24 | int64(data[6])<<16 |
-				int64(data[7])<<8 | int64(data[8])
-
-			// We average the latency out over the last 10 ping requests.
-			this.lock.Lock()
-			if client.latencydata[0] >= 10 {
-				client.latencydata[0] = 0
-				client.latencydata[1] = 0
-			}
-
-			client.latencydata[0]++
-			client.latencydata[1] += uint32(cms - oms)
-			this.lock.Unlock()
-			return
-		}
 	}
 
 	// Decrypt if necessary.
@@ -283,7 +266,35 @@ func (this *Peer) process(addr *net.UDPAddr, packet Packet, stamp int64) {
 		data = Compression.Decompress(data)
 	}
 
-	this.onMessage(client, data[0], data[1:])
+	// Check if we got a packet used by this lib internally (eg: ping).
+	// These don't have to be forwarded to the host app.
+	switch data[0] {
+	case MsgPing: // respond with supplied timestamp
+		data[0] = MsgPong
+		this.Send(addr, data)
+		return
+
+	case MsgPong: // Calculate latency from packet rounttrip time.
+		cms := time.Nanoseconds() / 1e3
+		oms := int64(data[1])<<56 | int64(data[2])<<48 | int64(data[3])<<40 |
+			int64(data[4])<<32 | int64(data[5])<<24 | int64(data[6])<<16 |
+			int64(data[7])<<8 | int64(data[8])
+
+		// We average the latency out over the last 10 ping requests.
+		this.lock.Lock()
+		if client.latencydata[0] >= 10 {
+			client.latencydata[0] = 0
+			client.latencydata[1] = 0
+		}
+
+		client.latencydata[0]++
+		client.latencydata[1] += uint32(cms - oms)
+		this.lock.Unlock()
+
+		this.onMessage(client, MsgLatency, uint16(client.latencydata[1]/client.latencydata[0]))
+	default:
+		this.onMessage(client, data[0], data[1:])
+	}
 }
 
 // Close the listener

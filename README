@@ -16,7 +16,11 @@ See client/README and the client code for an example of how it all works.
 
 - Full IPv4 and IPv6 support
 - NAT client resolution: Multiple clients connecting from behind a NAT router
-  and sharing the same public IP can accurately be identified.
+  and sharing the same public IP can accurately be identified. Not by using the
+  connecting portnumber, because this can be cycled inbetween packets by some
+  NAT routers. We use the public IP + the lower 2 bytes of the client's private
+  IP to generate a unique 24 byte peer id. See network/README for details on
+  how this works exactly.
 
 - Packet compression and encryption can be enabled/disabled.
   You can set (de)compression and (en/de)cryption handlers if you wish to use
@@ -26,7 +30,7 @@ See client/README and the client code for an example of how it all works.
   smaller chunks. The library will reassemble the packets on the receiving end
   and only then decompress/decrypt it all.
 
-- Customizable packet size limit. Defaults to 1400 bytes. This includes the
+- Customizable packet size limit. Defaults to 576 bytes. This includes the
   22 byte UDP header and a 5 or 7 byte (depending on which flags are set) header
   we use in this library internally.
 
@@ -34,7 +38,10 @@ See client/README and the client code for an example of how it all works.
   a customizable timeout value. Both newly connecting peers and those that
   time out generate messages you can intercept and act on. Refer to
   client/client.go to see how this works. This operates by sending PING packets
-  to known peers at regular (customizable) intervals.
+  to known peers at regular (customizable) intervals. We chose the ping option
+  over sending a timestamp in every packet, because it would add a considerable
+  amount of space overhead (8 bytes) in regular packet traffic. This space is
+  better put to use in other tasks; like sending actual game data.
 
 - Supports packet fragmentation. If a chunk of data you want to send exceeds
   the maximum packet size, the library will automatically create multiple
@@ -45,8 +52,8 @@ See client/README and the client code for an example of how it all works.
   All if this is completely transparent to the host application. All it will
   deal with is sending any arbitrarilly sized chunk of data and receive it on
   the other end. It will never know how many packets where involved. The client
-  simply hooks up a function which accepts a peerid, a message type id and the
-  actual complete, reassembled, uncompressed and decrypted dataset; ready for
+  simply hooks up a function which accepts a peerid, a message type and the
+  actual completly reassembled, uncompressed and decrypted dataset; ready for
   use.
 
 ================================================================================
@@ -62,8 +69,6 @@ TODO
   other packets.
 
 - Write some decent benchmarks.
-
-
 
 --------------------------------------------------------------------------------
  USAGE
