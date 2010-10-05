@@ -130,9 +130,9 @@ func (this *Peer) ping() {
 		select {
 		case _ = <-this.ticker.C:
 			for id = range this.clients {
+				// Use this opportunity to make sure client has not timed out.
 				if time.Nanoseconds()-this.clients[id].lastpacket > limit {
-					// This one has exceeded the non-response time limit.
-					// Consider it a lost cause.
+					// This one has exceeded the non-response time limit. Consider it a lost cause.
 					this.onMessage(this.clients[id], MsgPeerDisconnected, nil)
 
 					this.lock.Lock()
@@ -141,8 +141,7 @@ func (this *Peer) ping() {
 					continue
 				}
 
-				// Send current time in microseconds to clients.
-				// Use this opportunity to make sure clients have not timed out.
+				// Send current time in microseconds to client.
 				ms = time.Nanoseconds() / 1e3
 
 				data[1] = uint8(ms >> 56)
