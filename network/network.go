@@ -55,7 +55,7 @@ func GetClientId() (id []byte, err os.Error) {
 
 	// Connect to a random machine somewhere in this subnet. It's irrelevant
 	// where to, as long as it's not the loopback address.
-	if addr, err = net.ResolveUDPAddr("192.168.1.1:0"); err != nil {
+	if addr, err = net.ResolveUDPAddr("udp", "192.168.1.1:0"); err != nil {
 		return
 	}
 

@@ -3,7 +3,7 @@ package main
 import "os"
 import "net"
 import "os/signal"
-import "gnarly/network"
+import "github.com/cmars/gnarly/network"
 import "bytes"
 import "bufio"
 import "fmt"
@@ -19,7 +19,7 @@ func NewClient() *Client {
 func (this *Client) Run(addr string) (err os.Error) {
 	// Resolve/Validate the user supplied address
 	var pubaddr *net.UDPAddr
-	if pubaddr, err = net.ResolveUDPAddr(addr); err != nil {
+	if pubaddr, err = net.ResolveUDPAddr("udp", addr); err != nil {
 		return
 	}
 
@@ -54,9 +54,9 @@ loop:
 	for {
 		select {
 		case sig := <-signal.Incoming:
-			if usig, ok := sig.(signal.UnixSignal); ok {
+			if usig, ok := sig.(os.UnixSignal); ok {
 				switch usig {
-				case signal.SIGINT, signal.SIGTERM, signal.SIGKILL:
+				case os.SIGINT, os.SIGTERM, os.SIGKILL:
 					break loop
 				}
 			}
@@ -116,8 +116,8 @@ func (this *Client) input(addr *net.UDPAddr) {
 			continue
 		}
 
-		line = bytes.Join(bytes.Split(line, newline[0], -1), newline[1])
-		line = bytes.Join(bytes.Split(line, tab[0], -1), tab[1])
+		line = bytes.Join(bytes.Split(line, newline[0]), newline[1])
+		line = bytes.Join(bytes.Split(line, tab[0]), tab[1])
 
 		size = len(line) + 1
 		if size >= cap(data) {
