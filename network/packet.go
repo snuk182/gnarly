@@ -1,7 +1,8 @@
 package network
 
-import "crypto/md5"
-import "fmt"
+import (
+	"fmt"
+)
 
 // Packet flags
 const (
@@ -78,7 +79,6 @@ func (this Packet) String() string {
 //     V2 = 192.168.1.2 & 0.0.255.255 = 1.2       // = 2 bytes
 //    Joe = md5(V1 + V2)                          // = 16 bytes
 func (this Packet) Owner() string {
-	hash := md5.New()
-	//hash.Write() // 16 byte ipv6 address + 2 byte client id
-	return string(hash.Sum(this[0:18]))
+	// 16 byte ipv6 address + 2 byte client id
+	return string(md5hash(this[0:18]))
 }

@@ -37,8 +37,8 @@ func getPeerId(t *testing.T, public, private string) string {
 	buf.Write(net.ParseIP(public).To16())
 	buf.Write([]byte{ip[14], ip[15]})
 
-	h := md5.New()
-	hash := h.Sum(buf.Bytes())
+	h := md5.Sum(buf.Bytes())
+	hash := h[0:16]
 
 	buf.Truncate(0)
 	enc := base64.NewEncoder(base64.StdEncoding, buf)

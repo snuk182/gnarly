@@ -2,7 +2,6 @@ package network
 
 import (
 	"bytes"
-	"crypto/md5"
 	"encoding/base64"
 	"net"
 	"sync"
@@ -53,8 +52,7 @@ func NewPeer(addr *net.UDPAddr, clientid []uint8) (p *Peer, err error) {
 	buf.Write(addr.IP.To16())
 	buf.Write(clientid)
 
-	h := md5.New()
-	hash := h.Sum(buf.Bytes())
+	hash := md5hash(buf.Bytes())
 
 	buf.Truncate(0)
 	enc := base64.NewEncoder(base64.StdEncoding, buf)
@@ -165,7 +163,7 @@ func (this *Peer) poll() {
 	var size int
 	var addr *net.UDPAddr
 	var stamp int64
-	//var i int
+	var i int
 
 	datasize := PacketSize - 6 // = PacketSize-UdpHeader+len(ipv6(addr))
 	data := make([]uint8, datasize, datasize)
@@ -185,7 +183,9 @@ loop:
 				break loop
 			}
 		default:
-			copy(data, addr.IP.To16())
+			for i = 0; i < 16; i++ {
+				data[i] = addr.IP.To16()[i]
+			}
 			this.process(addr, data[0:size+16], stamp)
 		}
 	}
@@ -216,43 +216,43 @@ func (this *Peer) process(addr *net.UDPAddr, packet Packet, stamp int64) {
 	this.lock.Unlock()
 
 	if len(packet) > 22 {
-		// if packet[18]&PFFragmented != 0 {
-		// 	// This packet is part of a sequence. We need to store it and
-		// 	// make sure we get all of them. We can then reassemble the
-		// 	// original dataset.
+		if packet[18]&PFFragmented != 0 {
+			// This packet is part of a sequence. We need to store it and
+			// make sure we get all of them. We can then reassemble the
+			// original dataset.
 
-		// 	s1, s2 := packet.SubSequence()
-		// 	this.lock.Lock()
-		// 	if int(s2) > len(this.cache) {
-		// 		this.cache = make([]Packet, s2)
-		// 	}
-		// 	this.cache[s1] = packet
-		// 	this.lock.Unlock()
+			s1, s2 := packet.SubSequence()
+			this.lock.Lock()
+			if int(s2) > len(this.cache) {
+				this.cache = make([]Packet, s2)
+			}
+			this.cache[s1] = packet
+			this.lock.Unlock()
 
-		// 	// Check if we have all of them
-		// 	var i int
-		// 	for i = range this.cache {
-		// 		if this.cache[i] == nil {
-		// 			return // Not yet. Stop processing
-		// 		}
-		// 	}
+			// Check if we have all of them
+			var i int
+			for i = range this.cache {
+				if this.cache[i] == nil {
+					return // Not yet. Stop processing
+				}
+			}
 
-		// 	// We have all members of the sequence. Reassemble it.
-		// 	buf := bytes.NewBuffer(data)
+			// We have all members of the sequence. Reassemble it.
+			buf := bytes.NewBuffer(data)
 
-		// 	this.lock.Lock()
-		// 	for i = range this.cache {
-		// 		buf.Write(this.cache[i].Data())
-		// 		this.cache[i] = nil
-		// 	}
+			this.lock.Lock()
+			for i = range this.cache {
+				buf.Write(this.cache[i].Data())
+				this.cache[i] = nil
+			}
 
-		// 	this.cache = this.cache[0:0]
-		// 	this.lock.Unlock()
+			this.cache = this.cache[0:0]
+			this.lock.Unlock()
 
-		// 	data = buf.Bytes()
-		// } else {
-		data = packet.Data()
-		//}
+			data = buf.Bytes()
+		} else {
+			data = packet.Data()
+		}
 
 		// Decrypt if necessary.
 		if packet[18]&PFEncrypted != 0 && Encryption != nil {
@@ -366,12 +366,14 @@ func (this *Peer) Send(addr *net.UDPAddr, data []uint8) (err error) {
 		// Build and send as many packets as needed.
 		for {
 			// FIXME(jimt): Handle wrapping of this.Sequence value if it exceeds uint16
-			if this.Sequence == uint16(65535) {
-				return ErrPacketSequenceTooLong
-			}
+
 			this.scratch[3] = uint8(this.Sequence >> 8)
 			this.scratch[4] = uint8(this.Sequence)
-			this.Sequence++
+			if this.Sequence == 65535 { //attempt at seqeucnce wrap
+				sequence = 0
+			} else {
+				this.Sequence++
+			}
 
 			this.scratch[5] = cur
 			this.scratch[6] = total
@@ -391,12 +393,13 @@ func (this *Peer) Send(addr *net.UDPAddr, data []uint8) (err error) {
 		// Send any remaining data
 		if len(data) > 0 {
 			// FIXME(jimt): Handle wrapping of this.Sequence value if it exceeds uint16
-			if this.Sequence == uint16(65535) {
-				return ErrPacketSequenceTooLong
-			}
 			this.scratch[3] = uint8(this.Sequence >> 8)
 			this.scratch[4] = uint8(this.Sequence)
-			this.Sequence++
+			if this.Sequence == 65535 { //attempt at seqeucnce wrap
+				sequence = 0
+			} else {
+				this.Sequence++
+			}
 
 			this.scratch[5] = cur
 			this.scratch[6] = total
@@ -409,13 +412,13 @@ func (this *Peer) Send(addr *net.UDPAddr, data []uint8) (err error) {
 		// Single packet. Just send as-is
 
 		// FIXME(jimt): Handle wrapping of this.Sequence value if it exceeds uint16
-		if this.Sequence == uint16(65535) {
-			return ErrPacketSequenceTooLong
-		}
 		this.scratch[3] = uint8(this.Sequence >> 8)
 		this.scratch[4] = uint8(this.Sequence)
-		this.Sequence++
-
+		if this.Sequence == 65535 { //attempt at seqeucnce wrap
+			sequence = 0
+		} else {
+			this.Sequence++
+		}
 		copy(this.scratch[5:], data)
 		return this.send(addr, this.scratch[0:len(data)+5])
 	}
