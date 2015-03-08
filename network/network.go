@@ -1,6 +1,5 @@
 package network
 
-import "os"
 import "net"
 import "strings"
 
@@ -13,7 +12,7 @@ const UdpHeaderSize = 22
 // Maximum size of individual packets in bytes.
 // Some established defaults are listed here:
 //
-// * 1500 - The largest Ethernet packet size; it is also the default value. This 
+// * 1500 - The largest Ethernet packet size; it is also the default value. This
 //          is the typical setting for non-PPPoE, non-VPN connections. The
 //          default value for NETGEAR routers, adapters and switches.
 // * 1492 - The size PPPoE prefers.
@@ -28,7 +27,7 @@ const UdpHeaderSize = 22
 // modern applications, it does put dial-up users at a disadvantage. 576 bytes
 // ensures maximum compatibility, but If you are not targeting these, we
 // recommend changing this to 1400 byte.
-var PacketSize int = 576
+var PacketSize int = 1400
 
 // When set, this will be used to (de)compress packet data if the appropriate
 // flags are set and Compression != nil. While compresion is generally
@@ -47,9 +46,8 @@ var Compression Compressor = NewGnarlyCompression()
 // encryption, simply set this to nil.
 var Encryption Encrypter = NewGnarlyEncryption()
 
-
 // Creates a 2 byte ClientID from the local machine's IP.
-func GetClientId() (id []byte, err os.Error) {
+func GetClientId() (id []byte, err error) {
 	var conn *net.UDPConn
 	var addr *net.UDPAddr
 
@@ -79,7 +77,7 @@ func GetClientId() (id []byte, err os.Error) {
 	// TODO(jimt): I am unsure how 2 full IPv6 addresses in the same subnet relate
 	// to eachother. Specifically if the 2 last bytes in the 16-byte address are
 	// really the relevant bits that set them apart from eachother.
-	// For IPv4 this is simple: 192.168.2.101 vs 192.168.2.102 -> we need the 
+	// For IPv4 this is simple: 192.168.2.101 vs 192.168.2.102 -> we need the
 	// '2.101' and '2.102' bits. Bytes are stored in Big Endian order.
 	id = []byte{ip[14], ip[15]}
 	return

@@ -1,10 +1,12 @@
 package network
 
-import "os"
+import "errors"
 
 var (
-	ErrInvalidClientID       = os.NewError("Invalid Clientid specified")
-	ErrInvalidPacket         = os.NewError("Invalid packet format")
-	ErrInvalidMessageHandler = os.NewError("Invalid message handler")
-	ErrInvalidErrorHandler   = os.NewError("Invalid error handler")
+	ErrInvalidClientID       = errors.New("Invalid Clientid specified")
+	ErrInvalidPacket         = errors.New("Invalid packet format")
+	ErrInvalidMessageHandler = errors.New("Invalid message handler")
+	ErrInvalidErrorHandler   = errors.New("Invalid error handler")
+	ErrPacketSequenceTooLong = errors.New("Packet Sequence too long (>65535)")
+	ErrNoData                = errors.New("No data in packet.")
 )

@@ -9,7 +9,7 @@ const (
 	MsgPeerDisconnected              // A known peer has timed out.
 	MsgLatency                       // Reports a client's latency at customizable intervals
 
-	// Dummy value. Used to indicate where a host application should start 
+	// Dummy value. Used to indicate where a host application should start
 	// defining it's own message types. MsgMax, MsgMax+1, MsgMax+2 etc.
 	// There is room for 200 custom message types: 55-255
 	MsgMax uint8 = 55

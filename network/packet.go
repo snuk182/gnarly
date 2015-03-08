@@ -51,23 +51,23 @@ func (this Packet) String() string {
 		ss1, ss2, this.Flags(), this.Sequence(), id[0], id[1], string(this.Data()))
 }
 
-// This is a Md5 hash of the sender's IP and ClientID to and represents a 
+// This is a Md5 hash of the sender's IP and ClientID to and represents a
 // unique identifier for the sender. This should ensure accurate
 // identification of a user, even from multiple clients behind a NAT router,
-// or from a client behind a NAT router which arbitrarilly reassigns UDP 
-// ports (rare edge case). It is not actually sent across the wire, but 
+// or from a client behind a NAT router which arbitrarilly reassigns UDP
+// ports (rare edge case). It is not actually sent across the wire, but
 // rather it is generated from the receiver IP in the UDP header and the 2
 // byte clientID in the message header. It is not to be confused with a
 // session key. This Owner id is bound to the physical machine the user is
 // currently operating on. It remains the same across all sessions from that
 // particular machine, as long as it has the same public and private IP
 // addresses.
-// 
+//
 // Example: Bob and Joe share a LAN network through a NAT enabled router.
 //   The public IP for both is: 123.123.123.123
 //   Bob's private IP (within the LAN network) is: 192.168.1.1
 //   Joe's private IP (within the LAN network) is: 192.168.1.2
-// 
+//
 // Bob's owner id is calculated as follows:
 //     V1 = to_ipv6("123.123.123.123")            // = 16 bytes
 //     V2 = 192.168.1.1 & 0.0.255.255 = 1.1       // = 2 bytes
@@ -79,6 +79,6 @@ func (this Packet) String() string {
 //    Joe = md5(V1 + V2)                          // = 16 bytes
 func (this Packet) Owner() string {
 	hash := md5.New()
-	hash.Write(this[0:18]) // 16 byte ipv6 address + 2 byte client id
-	return string(hash.Sum())
+	//hash.Write() // 16 byte ipv6 address + 2 byte client id
+	return string(hash.Sum(this[0:18]))
 }

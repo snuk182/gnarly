@@ -1,18 +1,19 @@
 package network
 
-import "os"
-import "net"
-import "bytes"
-import "time"
-import "sync"
-import "crypto/md5"
-import "encoding/base64"
+import (
+	"bytes"
+	"crypto/md5"
+	"encoding/base64"
+	"net"
+	"sync"
+	"time"
+)
 
 // This type represents a function handler for dealing with incoming messages.
 type MessageHandler func(client *Peer, msgtype uint8, data interface{})
 
 // This type represents a function handler for dealing with error messages.
-type ErrorHandler func(err os.Error) bool
+type ErrorHandler func(err error) bool
 
 // This represents a unique client connecting to our machine. This structure
 // maintains some counters and buffers used for reliable identification and
@@ -38,7 +39,7 @@ type Peer struct {
 }
 
 // Constructs a new Peer instance
-func NewPeer(addr *net.UDPAddr, clientid []uint8) (p *Peer, err os.Error) {
+func NewPeer(addr *net.UDPAddr, clientid []uint8) (p *Peer, err error) {
 	if len(clientid) != 2 {
 		return nil, ErrInvalidClientID
 	}
@@ -52,12 +53,12 @@ func NewPeer(addr *net.UDPAddr, clientid []uint8) (p *Peer, err os.Error) {
 	buf.Write(addr.IP.To16())
 	buf.Write(clientid)
 
-	hash := md5.New()
-	hash.Write(buf.Bytes())
+	h := md5.New()
+	hash := h.Sum(buf.Bytes())
 
 	buf.Truncate(0)
 	enc := base64.NewEncoder(base64.StdEncoding, buf)
-	if _, err = enc.Write(hash.Sum()); err != nil {
+	if _, err = enc.Write(hash); err != nil {
 		enc.Close()
 		return nil, ErrInvalidClientID
 	}
@@ -69,9 +70,9 @@ func NewPeer(addr *net.UDPAddr, clientid []uint8) (p *Peer, err os.Error) {
 // Begin listening on the public IP/port. Specify the interval at which you
 // want to 'ping' known clients. This value is the number of nanoseconds you
 // want between each ping. It is used to measure latency and to detect timeouts.
-// The timeout argument is the number of seconds we should allow a peer to 
+// The timeout argument is the number of seconds we should allow a peer to
 // remain inactive before we consider it 'disconnected'.
-func (this *Peer) Listen(pinginterval uint64, timeout uint16, mh MessageHandler, eh ErrorHandler) (err os.Error) {
+func (this *Peer) Listen(pinginterval uint64, timeout uint16, mh MessageHandler, eh ErrorHandler) (err error) {
 	if this.udp != nil {
 		return
 	}
@@ -98,7 +99,7 @@ func (this *Peer) Listen(pinginterval uint64, timeout uint16, mh MessageHandler,
 	this.onMessage = mh
 	this.onError = eh
 	this.clients = make(map[string]*Peer)
-	this.ticker = time.NewTicker(int64(pinginterval))
+	this.ticker = time.NewTicker(time.Duration(pinginterval))
 	this.timeout = timeout
 	this.lock.Unlock()
 
@@ -131,18 +132,18 @@ func (this *Peer) ping() {
 		case _ = <-this.ticker.C:
 			for id = range this.clients {
 				// Use this opportunity to make sure client has not timed out.
-				if time.Nanoseconds()-this.clients[id].lastpacket > limit {
+				if time.Now().UnixNano()-this.clients[id].lastpacket > limit {
 					// This one has exceeded the non-response time limit. Consider it a lost cause.
 					this.onMessage(this.clients[id], MsgPeerDisconnected, nil)
 
 					this.lock.Lock()
-					this.clients[id] = nil, false
+					delete(this.clients, id)
 					this.lock.Unlock()
 					continue
 				}
 
 				// Send current time in microseconds to client.
-				ms = time.Nanoseconds() / 1e3
+				ms = time.Now().UnixNano() / 1e3
 
 				data[1] = uint8(ms >> 56)
 				data[2] = uint8(ms >> 48)
@@ -160,11 +161,11 @@ func (this *Peer) ping() {
 
 // Poll for incoming data
 func (this *Peer) poll() {
-	var err os.Error
+	var err error
 	var size int
 	var addr *net.UDPAddr
 	var stamp int64
-	var i int
+	//var i int
 
 	datasize := PacketSize - 6 // = PacketSize-UdpHeader+len(ipv6(addr))
 	data := make([]uint8, datasize, datasize)
@@ -172,7 +173,7 @@ func (this *Peer) poll() {
 loop:
 	for this.udp != nil {
 		size, addr, err = this.udp.ReadFromUDP(data[16:]) // leave room for 16-byte address
-		stamp = time.Nanoseconds()
+		stamp = time.Now().UnixNano()
 
 		switch {
 		case err != nil:
@@ -184,10 +185,7 @@ loop:
 				break loop
 			}
 		default:
-			//copy(data, addr.IP.To16())
-			for i = 0; i < 16; i++ {
-				data[i] = addr.IP[i]
-			}
+			copy(data, addr.IP.To16())
 			this.process(addr, data[0:size+16], stamp)
 		}
 	}
@@ -217,82 +215,90 @@ func (this *Peer) process(addr *net.UDPAddr, packet Packet, stamp int64) {
 	client.lastpacket = stamp
 	this.lock.Unlock()
 
-	if packet[18]&PFFragmented != 0 {
-		// This packet is part of a sequence. We need to store it and
-		// make sure we get all of them. We can then reassemble the
-		// original dataset.
+	if len(packet) > 22 {
+		// if packet[18]&PFFragmented != 0 {
+		// 	// This packet is part of a sequence. We need to store it and
+		// 	// make sure we get all of them. We can then reassemble the
+		// 	// original dataset.
 
-		s1, s2 := packet.SubSequence()
-		this.lock.Lock()
-		if int(s2) > len(this.cache) {
-			this.cache = make([]Packet, s2)
-		}
-		this.cache[s1] = packet
-		this.lock.Unlock()
+		// 	s1, s2 := packet.SubSequence()
+		// 	this.lock.Lock()
+		// 	if int(s2) > len(this.cache) {
+		// 		this.cache = make([]Packet, s2)
+		// 	}
+		// 	this.cache[s1] = packet
+		// 	this.lock.Unlock()
 
-		// Check if we have all of them
-		var i int
-		for i = range this.cache {
-			if this.cache[i] == nil {
-				return // Not yet. Stop processing
-			}
-		}
+		// 	// Check if we have all of them
+		// 	var i int
+		// 	for i = range this.cache {
+		// 		if this.cache[i] == nil {
+		// 			return // Not yet. Stop processing
+		// 		}
+		// 	}
 
-		// We have all members of the sequence. Reassemble it.
-		buf := bytes.NewBuffer(data)
+		// 	// We have all members of the sequence. Reassemble it.
+		// 	buf := bytes.NewBuffer(data)
 
-		this.lock.Lock()
-		for i = range this.cache {
-			buf.Write(this.cache[i].Data())
-			this.cache[i] = nil
-		}
+		// 	this.lock.Lock()
+		// 	for i = range this.cache {
+		// 		buf.Write(this.cache[i].Data())
+		// 		this.cache[i] = nil
+		// 	}
 
-		this.cache = this.cache[0:0]
-		this.lock.Unlock()
+		// 	this.cache = this.cache[0:0]
+		// 	this.lock.Unlock()
 
-		data = buf.Bytes()
-	} else {
+		// 	data = buf.Bytes()
+		// } else {
 		data = packet.Data()
-	}
+		//}
 
-	// Decrypt if necessary.
-	if packet[18]&PFEncrypted != 0 && Encryption != nil {
-		data = Encryption.Decrypt(id, data)
-	}
-
-	// Decompress if necessary.
-	if packet[18]&PFCompressed != 0 && Compression != nil {
-		data = Compression.Decompress(data)
-	}
-
-	// Check if we got a packet used by this lib internally (eg: ping).
-	// These don't have to be forwarded to the host app.
-	switch data[0] {
-	case MsgPing: // respond with supplied timestamp
-		data[0] = MsgPong
-		this.Send(addr, data)
-		return
-
-	case MsgPong: // Calculate latency from packet rounttrip time.
-		cms := time.Nanoseconds() / 1e3
-		oms := int64(data[1])<<56 | int64(data[2])<<48 | int64(data[3])<<40 |
-			int64(data[4])<<32 | int64(data[5])<<24 | int64(data[6])<<16 |
-			int64(data[7])<<8 | int64(data[8])
-
-		// We average the latency out over the last 10 ping requests.
-		this.lock.Lock()
-		if client.latencydata[0] >= 10 {
-			client.latencydata[0] = 0
-			client.latencydata[1] = 0
+		// Decrypt if necessary.
+		if packet[18]&PFEncrypted != 0 && Encryption != nil {
+			data = Encryption.Decrypt(id, data)
 		}
 
-		client.latencydata[0]++
-		client.latencydata[1] += uint32(cms - oms)
-		this.lock.Unlock()
+		// Decompress if necessary.
+		if packet[18]&PFCompressed != 0 && Compression != nil {
+			data = Compression.Decompress(data)
+		}
 
-		this.onMessage(client, MsgLatency, uint16(client.latencydata[1]/client.latencydata[0]))
-	default:
-		this.onMessage(client, data[0], data[1:])
+		// Check if we got a packet used by this lib internally (eg: ping).
+		// These don't have to be forwarded to the host app.
+		if len(data) > 0 {
+			switch data[0] {
+			case MsgPing: // respond with supplied timestamp
+				data[0] = MsgPong
+				this.Send(addr, data)
+				return
+
+			case MsgPong: // Calculate latency from packet rounttrip time.
+				cms := time.Now().UnixNano() / 1e3
+				oms := int64(data[1])<<56 | int64(data[2])<<48 | int64(data[3])<<40 |
+					int64(data[4])<<32 | int64(data[5])<<24 | int64(data[6])<<16 |
+					int64(data[7])<<8 | int64(data[8])
+
+				// We average the latency out over the last 10 ping requests.
+				this.lock.Lock()
+				if client.latencydata[0] >= 10 {
+					client.latencydata[0] = 0
+					client.latencydata[1] = 0
+				}
+
+				client.latencydata[0]++
+				client.latencydata[1] += uint32(cms - oms)
+				this.lock.Unlock()
+
+				this.onMessage(client, MsgLatency, uint16(client.latencydata[1]/client.latencydata[0]))
+			default:
+				this.onMessage(client, data[0], data[1:])
+			}
+		} else {
+			return //ErrNoData
+		}
+	} else {
+		return //ErrInvalidPacket
 	}
 }
 
@@ -320,10 +326,10 @@ func (this *Peer) Close() {
 // This sends the given data to the given address. It takes care of building
 // the packets with accurate header information. If the length of the supplied
 // data exceeds the established packet size (minus the UDP + message headers),
-// it will also take care of the required packet fragmentation so all the 
+// it will also take care of the required packet fragmentation so all the
 // information is sent. If network.Compressed and/or network.Encrypted are set.
 // this will also make sure these operations are performed on the data.
-func (this *Peer) Send(addr *net.UDPAddr, data []uint8) (err os.Error) {
+func (this *Peer) Send(addr *net.UDPAddr, data []uint8) (err error) {
 	this.lock.Lock()
 	this.lock.Unlock()
 
@@ -360,6 +366,9 @@ func (this *Peer) Send(addr *net.UDPAddr, data []uint8) (err os.Error) {
 		// Build and send as many packets as needed.
 		for {
 			// FIXME(jimt): Handle wrapping of this.Sequence value if it exceeds uint16
+			if this.Sequence == uint16(65535) {
+				return ErrPacketSequenceTooLong
+			}
 			this.scratch[3] = uint8(this.Sequence >> 8)
 			this.scratch[4] = uint8(this.Sequence)
 			this.Sequence++
@@ -382,6 +391,9 @@ func (this *Peer) Send(addr *net.UDPAddr, data []uint8) (err os.Error) {
 		// Send any remaining data
 		if len(data) > 0 {
 			// FIXME(jimt): Handle wrapping of this.Sequence value if it exceeds uint16
+			if this.Sequence == uint16(65535) {
+				return ErrPacketSequenceTooLong
+			}
 			this.scratch[3] = uint8(this.Sequence >> 8)
 			this.scratch[4] = uint8(this.Sequence)
 			this.Sequence++
@@ -397,6 +409,9 @@ func (this *Peer) Send(addr *net.UDPAddr, data []uint8) (err os.Error) {
 		// Single packet. Just send as-is
 
 		// FIXME(jimt): Handle wrapping of this.Sequence value if it exceeds uint16
+		if this.Sequence == uint16(65535) {
+			return ErrPacketSequenceTooLong
+		}
 		this.scratch[3] = uint8(this.Sequence >> 8)
 		this.scratch[4] = uint8(this.Sequence)
 		this.Sequence++
@@ -408,7 +423,7 @@ func (this *Peer) Send(addr *net.UDPAddr, data []uint8) (err os.Error) {
 }
 
 // Called from Peer.Send()
-func (this *Peer) send(addr *net.UDPAddr, data []uint8) (err os.Error) {
+func (this *Peer) send(addr *net.UDPAddr, data []uint8) (err error) {
 	if this.udp != nil {
 		// If this is a listening peer, just reuse the existing connection for sending.
 		_, err = this.udp.WriteToUDP(data, addr)
@@ -455,6 +470,6 @@ func (this *Peer) AddClient(p *Peer) {
 // Removes the known peer with the given id
 func (this *Peer) RemoveClient(id string) {
 	this.lock.Lock()
-	this.clients[id] = nil, false
+	delete(this.clients, id)
 	this.lock.Unlock()
 }

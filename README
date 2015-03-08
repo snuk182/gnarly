@@ -78,7 +78,7 @@ TODO
  buildtools installed and follow these steps:
 
  $ cd /path/to/codelib
- $ git clone http://github.com/jteeuwen/gnarly.git
+ $ git clone http://github.com/term1nal/gnarly.git
  $ cd gnarly
  $ make
 

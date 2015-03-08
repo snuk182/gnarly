@@ -4,7 +4,7 @@ import "os"
 import "fmt"
 
 func main() {
-	var err os.Error
+	var err error
 
 	if len(os.Args) < 2 {
 		fmt.Fprintf(os.Stderr, "[e] Missing arguments.\n")

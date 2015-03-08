@@ -3,7 +3,7 @@ package main
 import "os"
 import "net"
 import "os/signal"
-import "github.com/cmars/gnarly/network"
+import "github.com/term1nal/gnarly/network"
 import "bytes"
 import "bufio"
 import "fmt"
@@ -16,7 +16,7 @@ func NewClient() *Client {
 	return new(Client)
 }
 
-func (this *Client) Run(addr string) (err os.Error) {
+func (this *Client) Run(addr string) (err error) {
 	// Resolve/Validate the user supplied address
 	var pubaddr *net.UDPAddr
 	if pubaddr, err = net.ResolveUDPAddr("udp", addr); err != nil {
@@ -38,32 +38,24 @@ func (this *Client) Run(addr string) (err os.Error) {
 	// Create a message handler. We need a closure, because we can't pass
 	// a struct method as a function 'pointer'.
 	mh := func(c *network.Peer, mt uint8, d interface{}) { this.onMessage(c, mt, d) }
-	eh := func(err os.Error) bool { return this.onError(err) }
+	eh := func(err error) bool { return this.onError(err) }
 
 	// Start the listener. 5 second ping interval and 3 minute timeout treshold.
 	if err = this.peer.Listen(5e9, 180, mh, eh); err != nil {
 		return
 	}
 
-	fmt.Fprintf(os.Stdout, "[i] Listening on: %v\n", pubaddr)
+	fmt.Printf("[i] Listening on: %v\n", pubaddr)
 
 	// Hook up the input polling from stdin.
 	go this.input(pubaddr)
 
-loop:
-	for {
-		select {
-		case sig := <-signal.Incoming:
-			if usig, ok := sig.(os.UnixSignal); ok {
-				switch usig {
-				case os.SIGINT, os.SIGTERM, os.SIGKILL:
-					break loop
-				}
-			}
-		}
-	}
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt, os.Kill)
 
-	fmt.Fprint(os.Stdout, "[i] Shutting down\n")
+	<-c
+
+	fmt.Println("[i] Shutting down")
 	this.Close()
 	return
 }
@@ -78,26 +70,26 @@ func (this *Client) Close() {
 func (this *Client) onMessage(peer *network.Peer, msgtype uint8, data interface{}) {
 	switch msgtype {
 	case network.MsgPeerConnected:
-		fmt.Fprintf(os.Stdout, "[i] Peer connected: %s\n", peer.Id)
+		fmt.Printf("[i] Peer connected: %s\n", peer.Id)
 	case network.MsgPeerDisconnected:
-		fmt.Fprintf(os.Stdout, "[i] Peer disconnected: %s\n", peer.Id)
+		fmt.Printf("[i] Peer disconnected: %s\n", peer.Id)
 	case network.MsgLatency:
-		fmt.Fprintf(os.Stdout, "[i] Latency for %v: %d microseconds\n", peer.Id, data.(uint16))
+		fmt.Printf("[i] Latency for %v: %d microseconds\n", peer.Id, data.(uint16))
 	case network.MsgData:
-		fmt.Fprintf(os.Stdout, "[i] From: %v\n", peer.Id)
-		fmt.Fprintf(os.Stdout, "[i] Sequence #: 0x%04x\n", peer.Sequence)
-		fmt.Fprintf(os.Stdout, "[i] Data: %+v\n\n", data.([]byte))
+		fmt.Printf("[i] From: %v\n", peer.Id)
+		fmt.Printf("[i] Sequence #: 0x%04x\n", peer.Sequence)
+		fmt.Printf("[i] Data: %+v\n\n", data.([]byte))
 	}
 }
 
-func (this *Client) onError(err os.Error) bool {
+func (this *Client) onError(err error) bool {
 	fmt.Fprintf(os.Stderr, "[e] %v\n", err)
 	return false
 }
 
 func (this *Client) input(addr *net.UDPAddr) {
 	var line, data []byte
-	var err os.Error
+	var err error
 	var size int
 
 	fmt.Fprint(os.Stdout, "[i] Type some text and hit <enter> or ctrl-c to quit.\n")

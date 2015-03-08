@@ -37,13 +37,13 @@ func getPeerId(t *testing.T, public, private string) string {
 	buf.Write(net.ParseIP(public).To16())
 	buf.Write([]byte{ip[14], ip[15]})
 
-	hash := md5.New()
-	hash.Write(buf.Bytes())
+	h := md5.New()
+	hash := h.Sum(buf.Bytes())
 
 	buf.Truncate(0)
 	enc := base64.NewEncoder(base64.StdEncoding, buf)
 
-	if _, err := enc.Write(hash.Sum()); err != nil {
+	if _, err := enc.Write(hash); err != nil {
 		enc.Close()
 		return ""
 	}
