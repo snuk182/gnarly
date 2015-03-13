@@ -370,7 +370,7 @@ func (this *Peer) Send(addr *net.UDPAddr, data []uint8) (err error) {
 			this.scratch[3] = uint8(this.Sequence >> 8)
 			this.scratch[4] = uint8(this.Sequence)
 			if this.Sequence == 65535 { //attempt at seqeucnce wrap
-				sequence = 0
+				this.Sequence = 0
 			} else {
 				this.Sequence++
 			}
@@ -396,7 +396,7 @@ func (this *Peer) Send(addr *net.UDPAddr, data []uint8) (err error) {
 			this.scratch[3] = uint8(this.Sequence >> 8)
 			this.scratch[4] = uint8(this.Sequence)
 			if this.Sequence == 65535 { //attempt at seqeucnce wrap
-				sequence = 0
+				this.Sequence = 0
 			} else {
 				this.Sequence++
 			}
@@ -415,7 +415,7 @@ func (this *Peer) Send(addr *net.UDPAddr, data []uint8) (err error) {
 		this.scratch[3] = uint8(this.Sequence >> 8)
 		this.scratch[4] = uint8(this.Sequence)
 		if this.Sequence == 65535 { //attempt at seqeucnce wrap
-			sequence = 0
+			this.Sequence = 0
 		} else {
 			this.Sequence++
 		}
