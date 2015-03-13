@@ -3,7 +3,7 @@ package main
 import "os"
 import "net"
 import "os/signal"
-import "github.com/term1nal/gnarly/network"
+import "github.com/snuk182/gnarly/network"
 import "bytes"
 import "bufio"
 import "fmt"
