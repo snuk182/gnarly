@@ -157,6 +157,14 @@ func (this *Peer) ping() {
 	}
 }
 
+func (this *Peer) LocalAddr() net.Addr {
+	if this.udp != nil {
+		return this.udp.LocalAddr()
+	} else {
+		return nil
+	}
+}
+
 // Poll for incoming data
 func (this *Peer) poll() {
 	var err error
