@@ -362,7 +362,7 @@ func (this *Peer) Send(addr *net.UDPAddr, data []uint8) (err error) {
 	if len(data) > PacketSize-UdpHeaderSize-5 {
 		// Packet fragmentation required because data exceeds available packet space.
 		this.scratch[2] |= PFFragmented
-		size := PacketSize - UdpHeaderSize - 7
+		size := PacketSize - UdpHeaderSize - 8
 
 		var cur, total uint8
 		total = uint8(len(data) / size)
@@ -385,10 +385,11 @@ func (this *Peer) Send(addr *net.UDPAddr, data []uint8) (err error) {
 
 			this.scratch[5] = cur
 			this.scratch[6] = total
+			this.scratch[7] = MsgData
 			cur++
 
-			copy(this.scratch[7:], data)
-			if err = this.send(addr, this.scratch[0:size+7]); err != nil {
+			copy(this.scratch[8:], data)
+			if err = this.send(addr, this.scratch[0:size+8]); err != nil {
 				return
 			}
 			data = data[size:]
@@ -411,9 +412,10 @@ func (this *Peer) Send(addr *net.UDPAddr, data []uint8) (err error) {
 
 			this.scratch[5] = cur
 			this.scratch[6] = total
-			copy(this.scratch[7:], data)
+			this.scratch[7] = MsgData
+			copy(this.scratch[8:], data)
 
-			return this.send(addr, this.scratch[0:len(data)+7])
+			return this.send(addr, this.scratch[0:len(data)+8])
 		}
 
 	} else {
@@ -422,13 +424,14 @@ func (this *Peer) Send(addr *net.UDPAddr, data []uint8) (err error) {
 		// FIXME(jimt): Handle wrapping of this.Sequence value if it exceeds uint16
 		this.scratch[3] = uint8(this.Sequence >> 8)
 		this.scratch[4] = uint8(this.Sequence)
+		this.scratch[5] = MsgData
 		if this.Sequence == 65535 { //attempt at seqeucnce wrap
 			this.Sequence = 0
 		} else {
 			this.Sequence++
 		}
-		copy(this.scratch[5:], data)
-		return this.send(addr, this.scratch[0:len(data)+5])
+		copy(this.scratch[6:], data)
+		return this.send(addr, this.scratch[0:len(data)+6])
 	}
 	return
 }
