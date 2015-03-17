@@ -151,7 +151,7 @@ func (this *Peer) ping() {
 				data[6] = uint8(ms >> 16)
 				data[7] = uint8(ms >> 8)
 				data[8] = uint8(ms)
-				this.Send(this.clients[id].Addr, data)
+				this.send(this.clients[id].Addr, data, MsgPing)
 			}
 		}
 	}
@@ -278,7 +278,7 @@ func (this *Peer) process(addr *net.UDPAddr, packet Packet, stamp int64) {
 			switch data[0] {
 			case MsgPing: // respond with supplied timestamp
 				data[0] = MsgPong
-				this.Send(addr, data)
+				this.send(addr, data[1:], MsgPong)
 				return
 
 			case MsgPong: // Calculate latency from packet rounttrip time.
@@ -338,6 +338,10 @@ func (this *Peer) Close() {
 // information is sent. If network.Compressed and/or network.Encrypted are set.
 // this will also make sure these operations are performed on the data.
 func (this *Peer) Send(addr *net.UDPAddr, data []uint8) (err error) {
+	return this.send(addr, data, MsgData)
+}
+
+func (this *Peer) send(addr *net.UDPAddr, data []uint8, msgtype uint8) (err error) {
 	this.lock.Lock()
 	this.lock.Unlock()
 
@@ -362,7 +366,7 @@ func (this *Peer) Send(addr *net.UDPAddr, data []uint8) (err error) {
 	if len(data) > PacketSize-UdpHeaderSize-5 {
 		// Packet fragmentation required because data exceeds available packet space.
 		this.scratch[2] |= PFFragmented
-		size := PacketSize - UdpHeaderSize - 7
+		size := PacketSize - UdpHeaderSize - 8
 
 		var cur, total uint8
 		total = uint8(len(data) / size)
@@ -385,10 +389,11 @@ func (this *Peer) Send(addr *net.UDPAddr, data []uint8) (err error) {
 
 			this.scratch[5] = cur
 			this.scratch[6] = total
+			this.scratch[7] = msgtype
 			cur++
 
-			copy(this.scratch[7:], data)
-			if err = this.send(addr, this.scratch[0:size+7]); err != nil {
+			copy(this.scratch[8:], data)
+			if err = this.sendToSocket(addr, this.scratch[0:size+8]); err != nil {
 				return
 			}
 			data = data[size:]
@@ -411,9 +416,10 @@ func (this *Peer) Send(addr *net.UDPAddr, data []uint8) (err error) {
 
 			this.scratch[5] = cur
 			this.scratch[6] = total
-			copy(this.scratch[7:], data)
+			this.scratch[7] = msgtype
+			copy(this.scratch[8:], data)
 
-			return this.send(addr, this.scratch[0:len(data)+7])
+			return this.sendToSocket(addr, this.scratch[0:len(data)+8])
 		}
 
 	} else {
@@ -422,19 +428,20 @@ func (this *Peer) Send(addr *net.UDPAddr, data []uint8) (err error) {
 		// FIXME(jimt): Handle wrapping of this.Sequence value if it exceeds uint16
 		this.scratch[3] = uint8(this.Sequence >> 8)
 		this.scratch[4] = uint8(this.Sequence)
-		if this.Sequence == 65535 { //attempt at seqeucnce wrap
+		this.scratch[5] = msgtype
+			if this.Sequence == 65535 { //attempt at seqeucnce wrap
 			this.Sequence = 0
 		} else {
 			this.Sequence++
 		}
-		copy(this.scratch[5:], data)
-		return this.send(addr, this.scratch[0:len(data)+5])
+		copy(this.scratch[6:], data)
+		return this.sendToSocket(addr, this.scratch[0:len(data)+6])
 	}
 	return
 }
 
 // Called from Peer.Send()
-func (this *Peer) send(addr *net.UDPAddr, data []uint8) (err error) {
+func (this *Peer) sendToSocket(addr *net.UDPAddr, data []uint8) (err error) {
 	if this.udp != nil {
 		// If this is a listening peer, just reuse the existing connection for sending.
 		_, err = this.udp.WriteToUDP(data, addr)
